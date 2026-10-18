@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+:root {
+  --font-serif: "Georgia", "Cambria", "Times New Roman", serif;
+  --bg-parchment: #FDFBF7;
+  --bg-card: #FFFFFF;
+  --bg-muted: #F5F1EA;
+  --border-subtle: #E8E2D5;
+  --border-strong: #D6CEBE;
+  --ink-primary: #1C1917;
+  --ink-secondary: #57534E;
+  --ink-muted: #8C827A;
+  --copper-primary: #B86226;
+  --copper-hover: #9E521F;
+  --copper-light: #FBF0E6;
+  --sage-primary: #4A6356;
+  --sage-light: #EBF2EE;
+}
+
+@layer base {
+  body {
+    background-color: var(--bg-parchment);
+    color: var(--ink-primary);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
+
+  ::selection {
+    background-color: #E8D3C0;
+    color: #1C1917;
+  }
+}
+
+/* Custom interactive states and print styles for Provenance Passports */
+@media print {
+  body {
+    background-color: #FFFFFF !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .passport-container {
+    box-shadow: none !important;
+    border: 1px solid #CCCCCC !important;
+    max-width: 100% !important;
+  }
+}
+
+.hash-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+  letter-spacing: -0.025em;
+}
