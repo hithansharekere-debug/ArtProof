@@ -320,9 +320,16 @@ export default function ArtworkDetailPage() {
           title="Artwork Project Not Found"
           description="The requested artwork project could not be found in local browser storage."
           action={
-            <Link href="/dashboard">
-              <Button size="sm">Back to Studio Dashboard</Button>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href="/artworks">
+                <Button variant="outline" size="sm">
+                  My Artworks
+                </Button>
+              </Link>
+              <Link href="/dashboard">
+                <Button size="sm">Studio Dashboard</Button>
+              </Link>
+            </div>
           }
         />
       </div>
@@ -337,13 +344,22 @@ export default function ArtworkDetailPage() {
       {/* Top Navigation & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E8E2D5] pb-6">
         <div>
-          <Link
-            href="/dashboard"
-            className="inline-flex items-center gap-1.5 text-xs text-[#78716C] hover:text-[#1C1917] transition-colors mb-2"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            Back to Studio Dashboard
-          </Link>
+          <div className="flex items-center gap-2 text-xs text-[#78716C] mb-2">
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-1 hover:text-[#1C1917] transition-colors"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Studio Dashboard
+            </Link>
+            <span className="text-[#D6CEBE]">&bull;</span>
+            <Link
+              href="/artworks"
+              className="hover:text-[#1C1917] transition-colors"
+            >
+              My Artworks
+            </Link>
+          </div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl sm:text-3xl font-serif font-bold text-[#1C1917]">
               {project.title}

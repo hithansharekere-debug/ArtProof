@@ -46,6 +46,41 @@ describe("Validation Schemas Suite", () => {
       const res = projectInputSchema.safeParse(oldYear);
       expect(res.success).toBe(false);
     });
+
+    it("accepts valid project details with optional notes", () => {
+      const validWithNotes = {
+        title: "Horizon Nocturne",
+        artistName: "Marcus Vance",
+        medium: "Oil on Belgian Linen",
+        yearCreated: 2026,
+        description: "Twilight study",
+        notes: "Detailed underpainting with raw umber and mineral spirits",
+      };
+      const res = projectInputSchema.safeParse(validWithNotes);
+      expect(res.success).toBe(true);
+      if (res.success) {
+        expect(res.data.notes).toBe("Detailed underpainting with raw umber and mineral spirits");
+      }
+    });
+
+    it("rejects missing medium or excessive notes length", () => {
+      const missingMedium = {
+        title: "Study",
+        artistName: "Artist",
+        medium: "   ",
+        yearCreated: 2026,
+      };
+      expect(projectInputSchema.safeParse(missingMedium).success).toBe(false);
+
+      const excessiveNotes = {
+        title: "Study",
+        artistName: "Artist",
+        medium: "Oil",
+        yearCreated: 2026,
+        notes: "a".repeat(2001),
+      };
+      expect(projectInputSchema.safeParse(excessiveNotes).success).toBe(false);
+    });
   });
 
   describe("Milestone Input Validation", () => {

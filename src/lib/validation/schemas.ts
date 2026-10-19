@@ -28,6 +28,12 @@ export const projectInputSchema = z.object({
     .trim()
     .max(APP_CONFIG.limits.maxDescriptionLength, `Description cannot exceed ${APP_CONFIG.limits.maxDescriptionLength} characters`)
     .default(""),
+  notes: z
+    .string()
+    .trim()
+    .max(2000, "Notes cannot exceed 2000 characters")
+    .optional()
+    .default(""),
 });
 
 // Milestone / Event addition schema

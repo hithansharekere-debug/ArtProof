@@ -10,6 +10,7 @@ import {
   AlertCircle,
   Shield,
   Layers,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -43,6 +44,7 @@ export default function NewProjectPage() {
   // Status & error states
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [isSuccess, setIsSuccess] = useState<boolean>(false);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -117,7 +119,10 @@ export default function NewProjectPage() {
     setErrors({});
 
     try {
-      const projectId = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const projectId =
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? `proj_${crypto.randomUUID().replace(/-/g, "").substring(0, 16)}`
+          : `proj_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const now = new Date().toISOString();
 
       // Create genesis event: PROJECT_CREATED
@@ -153,10 +158,14 @@ export default function NewProjectPage() {
           dataUrl: filePreview || undefined,
         },
         events: [genesisEvent],
+        isDemo: false,
       };
 
       await storage.saveProject(newProject);
-      router.push(`/projects/${projectId}`);
+      setIsSuccess(true);
+      setTimeout(() => {
+        router.push(`/projects/${projectId}`);
+      }, 500);
     } catch (err) {
       setErrors({ form: `Failed to create project: ${String(err)}` });
       setSubmitting(false);
@@ -190,6 +199,13 @@ export default function NewProjectPage() {
 
       <DisclaimerBanner compact={true} />
 
+      {isSuccess && (
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+          <span>Artwork ledger successfully registered with genesis digest! Navigating to artwork studio...</span>
+        </div>
+      )}
+
       {errors.form && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -218,10 +234,11 @@ export default function NewProjectPage() {
               <input
                 id="title"
                 type="text"
+                disabled={submitting || isSuccess}
                 placeholder="e.g. Solitude in Amber, Horizon Study No. 3"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] ${
+                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
                   errors.title ? "border-red-500" : "border-[#D6CEBE]"
                 }`}
               />
@@ -236,10 +253,11 @@ export default function NewProjectPage() {
               <input
                 id="artistName"
                 type="text"
+                disabled={submitting || isSuccess}
                 placeholder="e.g. Elena Rostova or Studio Pseudonym"
                 value={artistName}
                 onChange={(e) => setArtistName(e.target.value)}
-                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] ${
+                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
                   errors.artistName ? "border-red-500" : "border-[#D6CEBE]"
                 }`}
               />
@@ -254,10 +272,11 @@ export default function NewProjectPage() {
               <input
                 id="medium"
                 type="text"
+                disabled={submitting || isSuccess}
                 placeholder="e.g. Oil on Linen, Digital Charcoal & Tempera"
                 value={medium}
                 onChange={(e) => setMedium(e.target.value)}
-                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] ${
+                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
                   errors.medium ? "border-red-500" : "border-[#D6CEBE]"
                 }`}
               />
@@ -274,9 +293,10 @@ export default function NewProjectPage() {
                 type="number"
                 min="1900"
                 max={new Date().getFullYear() + 2}
+                disabled={submitting || isSuccess}
                 value={yearCreated}
                 onChange={(e) => setYearCreated(Number(e.target.value))}
-                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] ${
+                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
                   errors.yearCreated ? "border-red-500" : "border-[#D6CEBE]"
                 }`}
               />
@@ -291,10 +311,11 @@ export default function NewProjectPage() {
               <textarea
                 id="description"
                 rows={3}
+                disabled={submitting || isSuccess}
                 placeholder="Describe the conceptual background, themes, or intended scope of this body of work..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226]"
+                className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
           </div>
@@ -417,10 +438,11 @@ export default function NewProjectPage() {
           <div className="space-y-1.5">
             <textarea
               rows={2}
+              disabled={submitting || isSuccess}
               placeholder="e.g. Initial canvas dimensions, underlying color palette intentions, reference sketches used..."
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226]"
+              className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed"
             />
           </div>
         </Card>
@@ -428,7 +450,7 @@ export default function NewProjectPage() {
         {/* Action Buttons */}
         <div className="flex items-center justify-between pt-4">
           <Link href="/dashboard">
-            <Button variant="ghost" type="button">
+            <Button variant="ghost" type="button" disabled={submitting || isSuccess}>
               Cancel
             </Button>
           </Link>
@@ -437,7 +459,7 @@ export default function NewProjectPage() {
             type="submit"
             size="lg"
             isLoading={submitting}
-            disabled={!selectedFile || !fileHash || hashingFile}
+            disabled={!selectedFile || !fileHash || hashingFile || submitting || isSuccess}
           >
             <Shield className="w-4 h-4 mr-1.5" />
             Initialize Artwork Ledger
