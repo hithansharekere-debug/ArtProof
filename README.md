@@ -60,13 +60,30 @@ src/
   └── types/                # Domain models for projects, events, and manifests
 ```
 
-### Event Chain Cryptographic Specification
+### Event Chain & Version Cryptographic Specification
 Each milestone is structured under the canonical schema: `ARTPROOF-SHA256-CHAIN-V1`:
 $$\text{Digest}_n = \text{SHA-256}(\text{CanonicalJSON}(\text{schemaVersion}, \text{id}, \text{projectId}, \text{sequence}, \text{eventType}, \text{timestamp}, \text{data}, \text{Digest}_{n-1}))$$
 
 - **Deterministic serialization**: Object keys are sorted alphabetically recursively to avoid arbitrary JavaScript key order discrepancies.
 - **Predecessor Linking**: Event 0 (Genesis) links to `null`. Each subsequent event strictly requires `previousDigest === events[n - 1].currentDigest`.
+- **Version Tracking**: Artists can record named development iterations (`ArtworkVersion`) with file hashes, descriptions, and archival flags. Each recorded version triggers an immutable `VERSION_RECORDED` milestone anchored in the event chain.
 - **Tamper Detection**: Any modified title, note, or reordered milestone breaks the chain immediately upon inspection.
+
+### Portable Provenance Passport & Manifest Specification
+The exported JSON manifest (`manifestVersion: "1.0.0"`) provides a portable, self-contained record:
+- **`project`**: Curatorial title, artist name, medium, creation year, statement (demarcated as self-reported artist claims).
+- **`versions`**: Complete array of recorded artwork master versions with labels, file metadata, and SHA-256 digests.
+- **`eventChain`**: Chronological array of verifiable milestone events linked via predecessor hash pointers.
+- **`declarations`**: Explicit verification scope, non-goals, and limitation disclosures.
+- **`summary`**: Total events, total versions, and head digest anchoring the entire history.
+
+### Independent Verifier Status Categories
+The offline, client-side verifier at `/verify` audits manifests without uploading data to any server, reporting one of 5 honest states:
+1. **Integrity check passed (`PASSED`)**: Event chain is mathematically intact and links unbroken. If an artwork file is provided, its SHA-256 matches exactly.
+2. **Integrity mismatch (`FAILED_CHAIN_INTEGRITY` / `FAILED_FILE_MISMATCH`)**: An event digest does not match its canonical preimage, a predecessor link is broken, or the tested artwork file differs from the recorded hash.
+3. **Unsupported format (`UNSUPPORTED_FORMAT`)**: The manifest version is not supported by this verifier (e.g. unknown future spec).
+4. **Invalid passport (`MALFORMED_MANIFEST`)**: Missing required JSON structure or corrupt syntax.
+5. **Incomplete evidence (`INSUFFICIENT_DATA`)**: The manifest contains zero recorded events in its chain.
 
 ---
 
@@ -79,7 +96,7 @@ $$\text{Digest}_n = \text{SHA-256}(\text{CanonicalJSON}(\text{schemaVersion}, \t
 - **Validation**: Zod (strict validation of untrusted JSON manifests and user inputs)
 - **Cryptography**: Web Crypto API (`crypto.subtle.digest`) with Node.js `node:crypto` test fallback
 - **Storage**: Browser IndexedDB (`artproof_db`) for local-first zero-cloud data preservation
-- **Test Runner**: Vitest (24 unit tests covering crypto vectors, schemas, and persistence)
+- **Test Runner**: Vitest (48 unit tests covering crypto vectors, schemas, security sanitization, edge cases, and persistence)
 
 ---
 
@@ -108,27 +125,32 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 - `npm run build`: Executes strict type-checking and builds the production application.
 - `npm run start`: Runs the built production server.
 - `npm run lint`: Runs ESLint with zero allowed warnings.
-- `npm test`: Executes the Vitest unit test suite.
+- `npm test`: Executes the Vitest unit test suite (48 tests).
 
 ---
 
-## 5. Testing Suite
+## 5. Testing & Security Verification Suite
 
-The project includes unit test coverage across three critical modules:
-1. **Cryptographic Suite (`src/lib/crypto/__tests__/provenance.test.ts`)**:
+The project includes 48 unit tests across three critical modules:
+1. **Cryptographic Suite (`src/lib/crypto/__tests__/provenance.test.ts`) [17 tests]**:
    - Deterministic canonical JSON key sorting.
    - Standard NIST SHA-256 test vectors (empty string, "hello", "The quick brown fox...").
    - Chain integrity verification for legitimate manifests.
    - Detection of modified event titles, deleted sequence items, and tampered artwork byte buffers.
-   - Rejection of malformed manifests.
-2. **Validation Schemas (`src/lib/validation/__tests__/schemas.test.ts`)**:
-   - Project input bounds (title length, valid years).
+   - Rejection of malformed manifests, missing primary artwork records, and non-object events without uncaught exceptions.
+   - Strict enforcement of genesis sequence continuity (sequence #0, `previousDigest: null`).
+2. **Validation & Security Schemas (`src/lib/validation/__tests__/schemas.test.ts`) [21 tests]**:
+   - Project input bounds (title length, artist name, valid years, note length).
    - Milestone input schema and phase constraints.
    - File size limits (max 20 MB) and MIME type whitelisting.
-   - Manifest import structure verification.
-3. **Storage & Demo Suite (`src/lib/storage/__tests__/storage.test.ts`)**:
-   - Save, retrieve, list, and delete artwork projects in IndexedDB.
+   - Manifest import structure verification with Zod.
+   - **Path traversal prevention (`sanitizeFilename`)**: Strips `../`, `..\`, control codes, and illegal characters, truncating long names while preserving valid extensions.
+   - **Data URL sanitization (`isSafeDataUrl`, `sanitizeDataUrl`)**: Blocks remote `http://` / `https://` URLs and script protocols (`javascript:`) to guarantee zero network leakage and prevent XSS.
+3. **Storage & Persistence Suite (`src/lib/storage/__tests__/storage.test.ts`) [10 tests]**:
+   - Save, retrieve, list, and delete artwork projects in IndexedDB with localStorage fallback.
    - Verification that the generated InnovArt demo study produces a 100% cryptographically valid manifest.
+   - Protection against user-created projects being overwritten by demo seeds.
+   - Defensive sanitization of untrusted stored records, stripping path traversal and purging unsafe data URLs.
 
 Run tests:
 ```bash
@@ -137,16 +159,20 @@ npm test
 
 ---
 
-## 6. Threat Model & Privacy Guarantees
+## 6. Threat Model, Security & Privacy Guarantees
 
 ### Privacy by Design
-- **Zero Cloud Transmission**: Your artwork master images, process sketches, and private creative notes remain inside your browser's IndexedDB. No telemetry or analytics are embedded.
+- **Zero Cloud Transmission**: Your artwork master images, process sketches, and private creative notes remain strictly inside your browser's local IndexedDB (`artproof_db`). No analytics, trackers, external fonts, or telemetry are loaded.
 - **Export Sanitization**: Generated Provenance Passports and manifests reference cryptographic hashes and public artist metadata, never private local filesystem paths.
+- **Data URL Privacy Shield**: External `http:` or `https:` URLs are stripped from imported manifests, preventing covert tracking pixels from contacting external servers.
 
-### Threat Model Boundaries
-1. **Post-Registration Integrity**: Once milestones and raw file digests are registered in the chain, any retroactive editing, sequence reordering, or byte alteration is mathematically detectable.
-2. **Pre-Registration Fabrications**: A local hash chain is not a blockchain or global consensus mechanism. A party with full control over the local browser can fabricate a timeline before signing it. Timestamps reflect local device clock time unless external third-party RFC 3161 notary servers are integrated in future versions.
-3. **Hashing vs Encryption**: SHA-256 provides integrity verification, not data confidentiality. Passwords or confidential keys should never be stored in artwork metadata.
+### Application Security Hardening
+- **Path Traversal Protection**: All user-provided and imported filenames pass through `sanitizeFilename`, neutralizing `../`, `..\`, and reserved operating system characters.
+- **Payload & Paste Bounds**: File uploads and pasted manifest inputs are bound to strict safety limits (2MB for manifests, 20MB for artwork files) to prevent browser thread locking and memory exhaustion.
+- **Object URL Lifecycle Management**: Every blob URL generated for downloads (`URL.createObjectURL`) is immediately revoked with `URL.revokeObjectURL` after triggering, preventing client memory leaks.
+- **Honest Cryptographic Recomputation**: The independent verifier ignores self-reported status strings (`"PASSED"`) in imported files, independently recomputing every SHA-256 digest from the canonical preimage.
+- **Defensive Error Handling**: Malformed or hostile JSON inputs return classified verification error reports (`MALFORMED_MANIFEST`, `UNSUPPORTED_FORMAT`) rather than crashing with unhandled exceptions.
+- **Double-Submission Prevention**: Action buttons disable and display loading states during asynchronous hashing and storage operations.
 
 ---
 

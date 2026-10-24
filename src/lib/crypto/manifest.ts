@@ -171,9 +171,22 @@ export function buildProvenanceManifest(project: ArtworkProject): ProvenanceMani
       },
     },
     eventChain: sanitizedEvents,
+    versions: (project.versions || []).map((v) => ({
+      id: v.id,
+      versionNumber: v.versionNumber,
+      versionLabel: v.versionLabel,
+      createdAt: v.createdAt,
+      notes: v.notes,
+      hasFile: v.hasFile,
+      sha256Hash: v.file?.sha256Hash || v.sha256Hash,
+      fileName: v.file?.name || v.fileName,
+      fileSizeBytes: v.file?.sizeBytes || v.fileSizeBytes,
+      isArchivalFinal: v.isArchivalFinal,
+    })),
     summary: {
       totalEvents: sanitizedEvents.length,
       totalEvidenceFiles,
+      totalVersions: (project.versions || []).length,
       headDigest,
     },
     declarations: {
@@ -195,11 +208,42 @@ export async function verifyProvenanceManifest(
   const checkedAt = new Date().toISOString();
   const messages: string[] = [];
 
-  // 1. Structure checks
+  // 1. Structure and version checks
+  if (!manifest || typeof manifest !== "object") {
+    return {
+      status: "MALFORMED_MANIFEST",
+      isValid: false,
+      chainValid: false,
+      artworkMatch: null,
+      headDigest: "",
+      totalEventsChecked: 0,
+      checkedAt,
+      messages: ["Manifest is null or not a valid JSON object."],
+    };
+  }
+
+  if (manifest.manifestVersion && manifest.manifestVersion !== "1.0.0") {
+    return {
+      status: "UNSUPPORTED_FORMAT",
+      isValid: false,
+      chainValid: false,
+      artworkMatch: null,
+      headDigest: "",
+      totalEventsChecked: 0,
+      checkedAt,
+      messages: [
+        `Unsupported manifest version "${String(manifest.manifestVersion)}". Supported version is "1.0.0".`,
+      ],
+    };
+  }
+
   if (
-    !manifest ||
     manifest.manifestVersion !== "1.0.0" ||
     !manifest.project ||
+    typeof manifest.project !== "object" ||
+    !manifest.project.primaryArtwork ||
+    typeof manifest.project.primaryArtwork !== "object" ||
+    typeof manifest.project.primaryArtwork.sha256Hash !== "string" ||
     !Array.isArray(manifest.eventChain)
   ) {
     return {
@@ -210,7 +254,7 @@ export async function verifyProvenanceManifest(
       headDigest: "",
       totalEventsChecked: 0,
       checkedAt,
-      messages: ["Manifest is missing required header fields or has an unsupported version."],
+      messages: ["Manifest is missing required header fields, project object, or valid primary artwork record."],
     };
   }
 
@@ -231,6 +275,27 @@ export async function verifyProvenanceManifest(
   // 2. Event chain verification
   for (let i = 0; i < events.length; i++) {
     const current = events[i];
+
+    // Event object structure check
+    if (
+      !current ||
+      typeof current !== "object" ||
+      typeof current.sequence !== "number" ||
+      typeof current.currentDigest !== "string"
+    ) {
+      return {
+        status: "MALFORMED_MANIFEST",
+        isValid: false,
+        chainValid: false,
+        artworkMatch: null,
+        headDigest: manifest.summary?.headDigest || "",
+        totalEventsChecked: i,
+        failingEventIndex: i,
+        failureReason: `Malformed event record at index ${i}.`,
+        checkedAt,
+        messages: [`Chain corrupted: event at index ${i} is missing required fields or is malformed.`],
+      };
+    }
 
     // Sequence continuity check
     if (current.sequence !== i) {
@@ -285,6 +350,10 @@ export async function verifyProvenanceManifest(
     // Recompute current event digest from preimage
     const calculatedDigest = await calculateEventDigest(current);
     if (calculatedDigest !== current.currentDigest) {
+      const eventTitle =
+        current.data && typeof current.data === "object" && "title" in current.data
+          ? String((current.data as Record<string, unknown>).title)
+          : current.eventType;
       return {
         status: "FAILED_CHAIN_INTEGRITY",
         isValid: false,
@@ -295,7 +364,7 @@ export async function verifyProvenanceManifest(
         failingEventIndex: i,
         failureReason: `Digest mismatch at event sequence ${i}: recorded ${current.currentDigest}, recomputed ${calculatedDigest}. Event content has been modified.`,
         checkedAt,
-        messages: [`Data modification detected in event ${i} ("${current.data.title || current.eventType}").`],
+        messages: [`Data modification detected in event ${i} ("${eventTitle}").`],
       };
     }
   }

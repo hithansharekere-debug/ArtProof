@@ -156,12 +156,183 @@ describe("ArtProof Cryptographic Suite", () => {
       expect(report.status).toBe("FAILED_FILE_MISMATCH");
     });
 
-    it("rejects malformed manifest objects", async () => {
-      const brokenManifest = { manifestVersion: "2.0.0" } as unknown as ProvenanceManifest;
-      const report = await verifyProvenanceManifest(brokenManifest);
+    it("rejects unsupported format when manifest version is not 1.0.0", async () => {
+      const unsupportedManifest = { manifestVersion: "2.0.0" } as unknown as ProvenanceManifest;
+      const report = await verifyProvenanceManifest(unsupportedManifest);
+
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("UNSUPPORTED_FORMAT");
+      expect(report.messages[0]).toContain('Unsupported manifest version "2.0.0"');
+    });
+
+    it("rejects malformed manifest objects missing project or event chain", async () => {
+      const malformedManifest = { manifestVersion: "1.0.0" } as unknown as ProvenanceManifest;
+      const report = await verifyProvenanceManifest(malformedManifest);
 
       expect(report.isValid).toBe(false);
       expect(report.status).toBe("MALFORMED_MANIFEST");
+    });
+
+    it("reports insufficient data when event chain contains zero events", async () => {
+      const emptyChainManifest = {
+        manifestVersion: "1.0.0",
+        generatedAt: "2026-10-01T00:00:00Z",
+        canonicalSpec: "ARTPROOF-SHA256-CHAIN-V1",
+        project: {
+          id: "proj_empty",
+          title: "Empty Project",
+          artistName: "Artist",
+          medium: "Digital",
+          yearCreated: 2026,
+          createdAt: "2026-10-01T00:00:00Z",
+          primaryArtwork: {
+            name: "art.png",
+            mimeType: "image/png",
+            sizeBytes: 100,
+            sha256Hash: "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+          },
+        },
+        eventChain: [],
+      } as unknown as ProvenanceManifest;
+
+      const report = await verifyProvenanceManifest(emptyChainManifest);
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("INSUFFICIENT_DATA");
+    });
+
+    it("prevents spoofed or self-reported status bypass attempt", async () => {
+      const project = await createTestProject();
+      const manifest = buildProvenanceManifest(project);
+
+      // Maliciously modify event title, but inject fake status claiming it's valid
+      manifest.eventChain[0].data.title = "Attacker Altered Title";
+      (manifest as unknown as Record<string, unknown>).status = "PASSED";
+      (manifest as unknown as Record<string, unknown>).isValid = true;
+
+      // The independent verifier ignores self-reported tags and recalculates all hashes
+      const report = await verifyProvenanceManifest(manifest);
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("FAILED_CHAIN_INTEGRITY");
+    });
+
+    it("verifies manifest containing recorded versions and VERSION_RECORDED events", async () => {
+      const project = await createTestProject();
+      const lastEvent = project.events[project.events.length - 1];
+
+      const versionEvent = await createTimelineEvent({
+        projectId: project.id,
+        sequence: project.events.length,
+        eventType: "VERSION_RECORDED",
+        timestamp: "2026-10-04T12:00:00Z",
+        data: {
+          title: "Version Recorded: v2.0 Archival Master",
+          versionLabel: "v2.0 Archival Master",
+          primaryArtworkHash: "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+        },
+        previousDigest: lastEvent.currentDigest,
+      });
+
+      project.events.push(versionEvent);
+      project.versions = [
+        {
+          id: "ver_1",
+          projectId: project.id,
+          versionNumber: 1,
+          versionLabel: "v1.0 Genesis",
+          createdAt: "2026-10-01T10:00:00Z",
+          recordedAt: "2026-10-01T10:00:00Z",
+          sha256Hash: "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+          fileName: "test_master.png",
+          fileSizeBytes: 1024,
+          mimeType: "image/png",
+          hasFile: true,
+          isArchivalFinal: false,
+        },
+        {
+          id: "ver_2",
+          projectId: project.id,
+          versionNumber: 2,
+          versionLabel: "v2.0 Archival Master",
+          createdAt: "2026-10-04T12:00:00Z",
+          recordedAt: "2026-10-04T12:00:00Z",
+          sha256Hash: "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592",
+          fileName: "archival_master.png",
+          fileSizeBytes: 2048,
+          mimeType: "image/png",
+          hasFile: true,
+          isArchivalFinal: true,
+        },
+      ];
+
+      const manifest = buildProvenanceManifest(project);
+      expect(manifest.versions).toBeDefined();
+      expect(manifest.versions?.length).toBe(2);
+      expect(manifest.summary.totalVersions).toBe(2);
+
+      const report = await verifyProvenanceManifest(manifest);
+      expect(report.isValid).toBe(true);
+      expect(report.status).toBe("PASSED");
+      expect(report.totalEventsChecked).toBe(4);
+    });
+
+    it("gracefully catches malformed manifest missing primaryArtwork without throwing", async () => {
+      const malformed = {
+        manifestVersion: "1.0.0",
+        generatedAt: "2026-10-01T00:00:00Z",
+        canonicalSpec: "ARTPROOF-SHA256-CHAIN-V1",
+        project: {
+          id: "proj_no_art",
+          title: "Corrupt Artwork",
+          artistName: "Unknown",
+          medium: "Digital",
+          yearCreated: 2026,
+          createdAt: "2026-10-01T00:00:00Z",
+          // missing primaryArtwork
+        },
+        eventChain: [
+          {
+            schemaVersion: 1,
+            id: "e1",
+            projectId: "proj_no_art",
+            sequence: 0,
+            eventType: "PROJECT_CREATED",
+            timestamp: "2026-10-01T00:00:00Z",
+            data: { title: "Genesis" },
+            previousDigest: null,
+            currentDigest: "0000000000000000000000000000000000000000000000000000000000000000",
+          },
+        ],
+      } as unknown as ProvenanceManifest;
+
+      const report = await verifyProvenanceManifest(malformed);
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("MALFORMED_MANIFEST");
+    });
+
+    it("gracefully catches manifest with malformed non-object event record in chain", async () => {
+      const project = await createTestProject();
+      const manifest = buildProvenanceManifest(project);
+
+      // Inject corrupt non-object item into event chain
+      (manifest.eventChain as unknown as unknown[])[1] = "corrupted_non_object_entry";
+
+      const report = await verifyProvenanceManifest(manifest);
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("MALFORMED_MANIFEST");
+      expect(report.failureReason).toContain("Malformed event record at index 1");
+    });
+
+    it("rejects chain where genesis event does not have sequence 0 or null previousDigest", async () => {
+      const project = await createTestProject();
+      const manifest = buildProvenanceManifest(project);
+
+      // Tamper genesis previousDigest
+      manifest.eventChain[0].previousDigest = "a".repeat(64);
+
+      const report = await verifyProvenanceManifest(manifest);
+      expect(report.isValid).toBe(false);
+      expect(report.status).toBe("FAILED_CHAIN_INTEGRITY");
+      expect(report.failureReason).toContain("Genesis event (sequence 0) must have a null previousDigest");
     });
   });
 });

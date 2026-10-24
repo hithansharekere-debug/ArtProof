@@ -16,6 +16,8 @@ import {
   AlertCircle,
   Image as ImageIcon,
   Palette,
+  History,
+  CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -31,10 +33,11 @@ import {
   verifyProvenanceManifest,
 } from "@/lib/crypto/manifest";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
-import { validateArtworkFile } from "@/lib/validation/schemas";
+import { validateArtworkFile, manifestImportSchema, sanitizeFilename } from "@/lib/validation/schemas";
 import { APP_CONFIG } from "@/config/app-config";
 import {
   ArtworkProject,
+  ArtworkVersion,
   AttachedEvidence,
   TimelineEventType,
   VerificationReport,
@@ -74,6 +77,20 @@ export default function ArtworkDetailPage() {
   const [revisedArtworkHash, setRevisedArtworkHash] = useState<string>("");
   const [revisedArtworkPreview, setRevisedArtworkPreview] = useState<string>("");
   const [revisedArtworkHashing, setRevisedArtworkHashing] = useState<boolean>(false);
+
+  // Version recording modal state
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [versionLabel, setVersionLabel] = useState("");
+  const [versionNotes, setVersionNotes] = useState("");
+  const [isArchivalFinal, setIsArchivalFinal] = useState(false);
+  const [versionFile, setVersionFile] = useState<File | null>(null);
+  const [versionFileHash, setVersionFileHash] = useState<string>("");
+  const [versionFilePreview, setVersionFilePreview] = useState<string>("");
+  const [versionFileHashing, setVersionFileHashing] = useState<boolean>(false);
+  const [versionError, setVersionError] = useState<string>("");
+  const [versionSubmitting, setVersionSubmitting] = useState<boolean>(false);
+
+  const [downloadSuccessNotice, setDownloadSuccessNotice] = useState<string | null>(null);
 
   const [modalSubmitting, setModalSubmitting] = useState(false);
   const [modalError, setModalError] = useState("");
@@ -289,19 +306,163 @@ export default function ArtworkDetailPage() {
     }
   };
 
+  // Version file handler
+  const handleVersionFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const val = validateArtworkFile(file);
+    if (!val.valid) {
+      setVersionError(val.error || "Invalid file");
+      return;
+    }
+
+    setVersionError("");
+    setVersionFile(file);
+    setVersionFileHashing(true);
+
+    try {
+      const hash = await computeSha256FromFile(file);
+      setVersionFileHash(hash);
+
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = () => setVersionFilePreview(reader.result as string);
+        reader.readAsDataURL(file);
+      } else {
+        setVersionFilePreview("");
+      }
+    } catch (err) {
+      setVersionError(`Failed to compute hash: ${String(err)}`);
+    } finally {
+      setVersionFileHashing(false);
+    }
+  };
+
+  // Submit new version record
+  const handleRecordVersion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!project) return;
+
+    if (!versionLabel.trim()) {
+      setVersionError("Version label is required (e.g. v1.1, v2.0 Archival Master).");
+      return;
+    }
+
+    if (!versionFile || !versionFileHash) {
+      setVersionError("Please select a file for this version to calculate its SHA-256 digest.");
+      return;
+    }
+
+    setVersionSubmitting(true);
+    setVersionError("");
+
+    try {
+      const existingVersions = project.versions || [];
+      const newVersion: ArtworkVersion = {
+        id: `ver_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        projectId: project.id,
+        versionNumber: existingVersions.length + 1,
+        versionLabel: versionLabel.trim(),
+        createdAt: new Date().toISOString(),
+        recordedAt: new Date().toISOString(),
+        hasFile: true,
+        file: {
+          name: versionFile.name,
+          mimeType: versionFile.type || "application/octet-stream",
+          sizeBytes: versionFile.size,
+          sha256Hash: versionFileHash,
+          algorithm: "SHA-256",
+          dataUrl: versionFilePreview || undefined,
+        },
+        sha256Hash: versionFileHash,
+        fileName: versionFile.name,
+        fileSizeBytes: versionFile.size,
+        mimeType: versionFile.type || "application/octet-stream",
+        notes: versionNotes.trim() || undefined,
+        isArchivalFinal,
+        dataUrl: versionFilePreview || undefined,
+      };
+
+      const currentEvents = project.events;
+      const lastEvent = currentEvents[currentEvents.length - 1];
+      const nextSequence = currentEvents.length;
+      const previousDigest = lastEvent ? lastEvent.currentDigest : null;
+
+      const newEvent = await createTimelineEvent({
+        projectId: project.id,
+        sequence: nextSequence,
+        eventType: "VERSION_RECORDED",
+        timestamp: new Date().toISOString(),
+        data: {
+          title: `Artwork Version: ${versionLabel.trim()}`,
+          description: versionNotes.trim() || undefined,
+          versionLabel: versionLabel.trim(),
+          primaryArtworkHash: versionFileHash,
+          notes: isArchivalFinal
+            ? "Marked as official archival master release."
+            : "Creative progression version recorded.",
+        },
+        previousDigest,
+      });
+
+      const updatedProject: ArtworkProject = {
+        ...project,
+        updatedAt: new Date().toISOString(),
+        versions: [...existingVersions, newVersion],
+        events: [...project.events, newEvent],
+        primaryArtwork: isArchivalFinal
+          ? {
+              name: versionFile.name,
+              mimeType: versionFile.type || "application/octet-stream",
+              sizeBytes: versionFile.size,
+              sha256Hash: versionFileHash,
+              dataUrl: versionFilePreview || project.primaryArtwork.dataUrl,
+            }
+          : project.primaryArtwork,
+      };
+
+      await storage.saveProject(updatedProject);
+      await refreshProjectAndVerify();
+
+      setShowVersionModal(false);
+      setVersionLabel("");
+      setVersionNotes("");
+      setIsArchivalFinal(false);
+      setVersionFile(null);
+      setVersionFileHash("");
+      setVersionFilePreview("");
+    } catch (err) {
+      setVersionError(`Failed to record version: ${String(err)}`);
+    } finally {
+      setVersionSubmitting(false);
+    }
+  };
+
   const handleDownloadManifest = () => {
     if (!project) return;
-    const manifest = buildProvenanceManifest(project);
-    const jsonString = JSON.stringify(manifest, null, 2);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-provenance-manifest.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      const manifest = buildProvenanceManifest(project);
+      const val = manifestImportSchema.safeParse(manifest);
+      if (!val.success) {
+        console.error("Manifest schema validation failed:", val.error);
+      }
+      const jsonString = JSON.stringify(manifest, null, 2);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const safeName = sanitizeFilename(project.title, "artwork");
+      a.download = `${safeName}-provenance-manifest.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setDownloadSuccessNotice("Manifest JSON validated and downloaded successfully.");
+      setTimeout(() => setDownloadSuccessNotice(null), 4000);
+    } catch (err) {
+      console.error("Failed to download manifest:", err);
+    }
   };
 
   if (loading) {
@@ -388,12 +549,26 @@ export default function ArtworkDetailPage() {
             </Button>
           </Link>
 
+          <Button variant="outline" size="sm" onClick={() => setShowVersionModal(true)}>
+            <History className="w-3.5 h-3.5 mr-1 text-[#B86226]" />
+            Record Version
+          </Button>
+
           <Button size="sm" onClick={() => setShowAddModal(true)}>
             <Plus className="w-3.5 h-3.5 mr-1" />
             Record Milestone
           </Button>
         </div>
       </div>
+
+      {downloadSuccessNotice && (
+        <div className="p-3 bg-[#EBF2EE] border border-[#C5D8CE] rounded-xl text-xs text-[#2D4538] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{downloadSuccessNotice}</span>
+          </div>
+        </div>
+      )}
 
       {/* Cryptographic Chain Status Banner */}
       {verificationReport && (
@@ -490,6 +665,88 @@ export default function ArtworkDetailPage() {
             </div>
           </Card>
 
+          {/* Version History Card */}
+          <Card className="bg-white space-y-4">
+            <div className="flex items-center justify-between border-b border-[#E8E2D5] pb-2">
+              <div className="flex items-center gap-1.5">
+                <History className="w-4 h-4 text-[#B86226]" />
+                <h2 className="font-serif font-semibold text-sm text-[#1C1917]">
+                  Version History
+                </h2>
+              </div>
+              <span className="text-[11px] font-mono text-[#78716C]">
+                {(project.versions || []).length} Recorded
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {(project.versions || []).length === 0 ? (
+                <p className="text-xs text-[#8C827A] italic">
+                  No development versions recorded yet.
+                </p>
+              ) : (
+                (project.versions || []).map((ver) => (
+                  <div
+                    key={ver.id}
+                    className="p-3 rounded-lg bg-[#FAF7F0] border border-[#E8E2D5] space-y-2 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-[#1C1917] font-mono">
+                        {ver.versionLabel}
+                      </span>
+                      {ver.isArchivalFinal ? (
+                        <Badge variant="copper" size="sm">
+                          Archival Master
+                        </Badge>
+                      ) : (
+                        <Badge variant="parchment" size="sm">
+                          Progress
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="text-[11px] text-[#57534E] flex items-center justify-between">
+                      <span className="truncate max-w-[140px]">
+                        {ver.fileName || ver.file?.name || "Version File"}
+                      </span>
+                      <span className="text-[#8C827A]">
+                        {(((ver.fileSizeBytes ?? ver.file?.sizeBytes) || 0) / 1024).toFixed(1)} KB
+                      </span>
+                    </div>
+
+                    {ver.notes && (
+                      <p className="text-[11px] text-[#57534E] italic leading-tight">
+                        &ldquo;{ver.notes}&rdquo;
+                      </p>
+                    )}
+
+                    <div className="space-y-0.5 pt-1 border-t border-[#E8E2D5]">
+                      <span className="text-[10px] text-[#8C827A] block">SHA-256 Digest:</span>
+                      <HashViewer
+                        hash={ver.sha256Hash || ver.file?.sha256Hash || ""}
+                        truncate={true}
+                      />
+                    </div>
+
+                    <div className="text-[10px] text-[#8C827A] text-right">
+                      {new Date(ver.recordedAt || ver.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full text-xs"
+              onClick={() => setShowVersionModal(true)}
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" />
+              Record New Version
+            </Button>
+          </Card>
+
           {/* Description & Notes */}
           <Card className="bg-white space-y-3">
             <h2 className="font-serif font-semibold text-sm text-[#1C1917] border-b border-[#E8E2D5] pb-2">
@@ -529,7 +786,7 @@ export default function ArtworkDetailPage() {
                     className={`absolute -left-[30px] top-4 w-5 h-5 rounded-full border-2 flex items-center justify-center text-[10px] font-bold ${
                       isGenesis
                         ? "bg-[#292524] text-white border-[#1C1917]"
-                        : event.eventType === "ARTWORK_REVISED"
+                        : event.eventType === "VERSION_RECORDED" || event.eventType === "ARTWORK_REVISED"
                         ? "bg-[#B86226] text-white border-[#9E521F]"
                         : "bg-white text-[#57534E] border-[#B86226]"
                     }`}
@@ -546,6 +803,8 @@ export default function ArtworkDetailPage() {
                           variant={
                             isGenesis
                               ? "ink"
+                              : event.eventType === "VERSION_RECORDED"
+                              ? "copper"
                               : event.eventType === "ARTWORK_REVISED"
                               ? "copper"
                               : event.eventType === "EVIDENCE_ATTACHED"
@@ -671,11 +930,16 @@ export default function ArtworkDetailPage() {
 
       {/* Add Milestone Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="milestone-modal-title"
+        >
           <div className="bg-white rounded-2xl border border-[#D6CEBE] max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl p-6 space-y-5">
             <div className="flex items-center justify-between border-b border-[#E8E2D5] pb-3">
               <div>
-                <h3 className="font-serif font-bold text-lg text-[#1C1917]">
+                <h3 id="milestone-modal-title" className="font-serif font-bold text-lg text-[#1C1917]">
                   Record Milestone Event #{project.events.length}
                 </h3>
                 <p className="text-xs text-[#78716C]">
@@ -686,7 +950,8 @@ export default function ArtworkDetailPage() {
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
-                className="text-[#8C827A] hover:text-[#1C1917] text-lg font-bold p-1"
+                className="text-[#8C827A] hover:text-[#1C1917] text-lg font-bold p-1 rounded-md"
+                aria-label="Close dialog"
               >
                 ✕
               </button>
@@ -881,6 +1146,153 @@ export default function ArtworkDetailPage() {
                   disabled={evidenceHashing || revisedArtworkHashing}
                 >
                   Append to Cryptographic Chain
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Record Version Modal */}
+      {showVersionModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="version-modal-title"
+        >
+          <div className="bg-white rounded-2xl border border-[#D6CEBE] max-w-xl w-full max-h-[90vh] overflow-y-auto shadow-xl p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-[#E8E2D5] pb-3">
+              <div>
+                <h3 id="version-modal-title" className="font-serif font-bold text-lg text-[#1C1917] flex items-center gap-2">
+                  <History className="w-5 h-5 text-[#B86226]" />
+                  Record Artwork Version
+                </h3>
+                <p className="text-xs text-[#78716C] mt-0.5">
+                  Register a named milestone version with cryptographic SHA-256 byte verification.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowVersionModal(false)}
+                className="text-[#8C827A] hover:text-[#1C1917] text-lg font-bold p-1 rounded-md"
+                aria-label="Close dialog"
+              >
+                ✕
+              </button>
+            </div>
+
+            {versionError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{versionError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleRecordVersion} className="space-y-4">
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-[#292524]">
+                  Version Label <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. v1.1 Detail Pass, v2.0 Archival Master"
+                  value={versionLabel}
+                  onChange={(e) => setVersionLabel(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226]"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-xs font-semibold text-[#292524]">
+                  Version Notes / Decisions (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="Notes on layer adjustments, color corrections, final varnishing, or export specifications..."
+                  value={versionNotes}
+                  onChange={(e) => setVersionNotes(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226]"
+                />
+              </div>
+
+              <div className="p-4 bg-[#FAF7F0] rounded-xl border border-[#E8E2D5] space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[#292524]">
+                    Select Artwork Version File <span className="text-red-500">*</span>
+                  </span>
+                  <Badge variant="sage" size="sm">
+                    SHA-256 Calculated
+                  </Badge>
+                </div>
+
+                <input
+                  type="file"
+                  accept={APP_CONFIG.limits.allowedExtensions.join(",")}
+                  onChange={handleVersionFileChange}
+                  className="text-xs text-[#57534E]"
+                  required
+                />
+
+                {versionFileHashing && (
+                  <p className="text-xs text-[#B86226]">Calculating version byte hash...</p>
+                )}
+
+                {versionFile && versionFileHash && (
+                  <div className="space-y-2 pt-2 border-t border-[#E8E2D5]">
+                    <div className="flex items-center justify-between text-xs text-[#292524]">
+                      <span className="truncate max-w-[200px] font-medium">{versionFile.name}</span>
+                      <span className="text-[#8C827A]">
+                        {(versionFile.size / 1024).toFixed(1)} KB
+                      </span>
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <span className="text-[10px] text-[#8C827A] block">SHA-256 Digest:</span>
+                      <HashViewer hash={versionFileHash} truncate={true} />
+                    </div>
+
+                    {versionFilePreview && (
+                      <div className="max-h-36 rounded overflow-hidden border border-[#E2DBD0] bg-white mt-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={versionFilePreview}
+                          alt="Version preview"
+                          className="w-full h-28 object-contain"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-[#F5F2EB] rounded-xl border border-[#E0D8C8]">
+                <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-[#292524]">
+                  <input
+                    type="checkbox"
+                    checked={isArchivalFinal}
+                    onChange={(e) => setIsArchivalFinal(e.target.checked)}
+                    className="rounded text-[#B86226] focus:ring-[#B86226]"
+                  />
+                  <span>Mark this version as the official archival master release</span>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#E8E2D5]">
+                <Button
+                  variant="ghost"
+                  type="button"
+                  onClick={() => setShowVersionModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  isLoading={versionSubmitting}
+                  disabled={versionFileHashing || !versionFileHash}
+                >
+                  Record Version & Chain Event
                 </Button>
               </div>
             </form>

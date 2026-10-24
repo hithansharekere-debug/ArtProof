@@ -115,6 +115,42 @@ export async function generateDemoProject(): Promise<ArtworkProject> {
       sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     },
     events: [event0, event1, event2, event3],
+    versions: [
+      {
+        id: "ver_demo_1",
+        projectId,
+        versionNumber: 1,
+        versionLabel: "v1.0 Compositional Gesture",
+        createdAt: "2026-09-18T10:15:00.000Z",
+        notes: "Preliminary gesture and 3-value wireframe staging.",
+        hasFile: true,
+        file: {
+          name: "sketch_value_pass_v1.png",
+          mimeType: "image/png",
+          sizeBytes: 1245000,
+          sha256Hash: "8f434346648f6b96df89dda901c5176b10e6d83961dd3c1ac88b59b2dc327aa4",
+          algorithm: "SHA-256",
+        },
+        associatedEventId: "evt_demo_1_sketch",
+      },
+      {
+        id: "ver_demo_2",
+        projectId,
+        versionNumber: 2,
+        versionLabel: "v2.0 Archival Master",
+        createdAt: "2026-10-02T18:00:00.000Z",
+        notes: "Dammar varnish layer applied; final 300 DPI museum archival scan captured.",
+        hasFile: true,
+        file: {
+          name: "solitude_in_amber_master.png",
+          mimeType: "image/png",
+          sizeBytes: 4892010,
+          sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          algorithm: "SHA-256",
+        },
+        associatedEventId: "evt_demo_3_final",
+      },
+    ],
     isDemo: true,
   };
 }

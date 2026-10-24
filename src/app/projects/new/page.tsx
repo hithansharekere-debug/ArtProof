@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/Badge";
 import { HashViewer } from "@/components/ui/HashViewer";
 import { DisclaimerBanner } from "@/components/ui/DisclaimerBanner";
 import { APP_CONFIG } from "@/config/app-config";
-import { projectInputSchema, validateArtworkFile } from "@/lib/validation/schemas";
+import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
 import { storage } from "@/lib/storage/storage-provider";
@@ -151,7 +151,7 @@ export default function NewProjectPage() {
         createdAt: now,
         updatedAt: now,
         primaryArtwork: {
-          name: selectedFile.name,
+          name: sanitizeFilename(selectedFile.name, "master.png"),
           mimeType: selectedFile.type || "application/octet-stream",
           sizeBytes: selectedFile.size,
           sha256Hash: fileHash,

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { storage } from "@/lib/storage/storage-provider";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
-import { projectInputSchema, validateArtworkFile } from "@/lib/validation/schemas";
+import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
 import { ArtworkProject } from "@/types/provenance";
 
 interface NewArtworkDialogProps {
@@ -123,15 +123,13 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
       const now = new Date().toISOString();
 
       let masterFileHash = "";
-      let masterFileName = `${parseResult.data.title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")}-master.png`;
+      let masterFileName = `${sanitizeFilename(parseResult.data.title, "artwork")}-master.png`;
       let masterMimeType = "image/png";
       let masterSizeBytes = 1024;
       const masterDataUrl = filePreview || undefined;
 
       if (selectedFile) {
-        masterFileName = selectedFile.name;
+        masterFileName = sanitizeFilename(selectedFile.name, "master.png");
         masterMimeType = selectedFile.type || "application/octet-stream";
         masterSizeBytes = selectedFile.size;
         masterFileHash = await computeSha256FromFile(selectedFile);

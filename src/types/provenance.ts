@@ -1,11 +1,12 @@
-// Core domain types for ArtProof provenance, artwork projects, event chains, and verification.
+// Core domain types for ArtProof provenance, artwork projects, event chains, versions, and verification.
 
 export type TimelineEventType =
   | "PROJECT_CREATED"
   | "MILESTONE_LOGGED"
   | "EVIDENCE_ATTACHED"
   | "ARTWORK_REVISED"
-  | "NOTE_RECORDED";
+  | "NOTE_RECORDED"
+  | "VERSION_RECORDED";
 
 export interface AttachedEvidence {
   id: string;
@@ -18,6 +19,33 @@ export interface AttachedEvidence {
   fileDataUrl?: string; // Stored locally in IndexedDB / local-first, omitted in minimal manifests
 }
 
+export interface ArtworkVersion {
+  id: string; // Stable unique version ID (e.g. "ver_...")
+  projectId: string; // Parent artwork ID
+  versionNumber: number; // 1, 2, 3...
+  versionLabel: string; // e.g. "v1.0 Genesis", "v1.1 Sketch Pass", "v2.0 Archival Master"
+  createdAt: string; // ISO 8601 UTC
+  notes?: string; // Optional change notes or creative justification
+  hasFile: boolean; // True when user supplied a file, false when conceptual/structural
+  file?: {
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256Hash: string; // Hex SHA-256 byte digest
+    algorithm: "SHA-256";
+    dataUrl?: string; // Local storage preview
+  };
+  associatedEventId?: string; // Links to the sequence TimelineEvent in the provenance chain
+  // Convenience fields for flat usage, display, and export
+  sha256Hash?: string;
+  fileName?: string;
+  fileSizeBytes?: number;
+  mimeType?: string;
+  isArchivalFinal?: boolean;
+  recordedAt?: string;
+  dataUrl?: string;
+}
+
 export interface TimelineEventData {
   title: string;
   description?: string;
@@ -26,6 +54,9 @@ export interface TimelineEventData {
   primaryArtworkHash?: string;
   notes?: string;
   revisionReason?: string;
+  versionId?: string;
+  versionLabel?: string;
+  versionNumber?: number;
   [key: string]: unknown;
 }
 
@@ -58,6 +89,7 @@ export interface ArtworkProject {
     dataUrl?: string; // Local storage preview
   };
   events: TimelineEvent[];
+  versions?: ArtworkVersion[];
   isDemo?: boolean;
 }
 
@@ -81,9 +113,22 @@ export interface ProvenanceManifest {
     };
   };
   eventChain: TimelineEvent[];
+  versions?: {
+    id: string;
+    versionNumber: number;
+    versionLabel: string;
+    createdAt: string;
+    notes?: string;
+    hasFile: boolean;
+    sha256Hash?: string;
+    fileName?: string;
+    fileSizeBytes?: number;
+    isArchivalFinal?: boolean;
+  }[];
   summary: {
     totalEvents: number;
     totalEvidenceFiles: number;
+    totalVersions?: number;
     headDigest: string;
   };
   declarations: {
@@ -98,7 +143,8 @@ export type VerificationStatus =
   | "FAILED_CHAIN_INTEGRITY"
   | "FAILED_FILE_MISMATCH"
   | "MALFORMED_MANIFEST"
-  | "INSUFFICIENT_DATA";
+  | "INSUFFICIENT_DATA"
+  | "UNSUPPORTED_FORMAT";
 
 export interface VerificationReport {
   status: VerificationStatus;

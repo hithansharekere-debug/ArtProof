@@ -1,4 +1,5 @@
-import { ArtworkProject, TimelineEvent } from "@/types/provenance";
+import { ArtworkProject, ArtworkVersion, TimelineEvent } from "@/types/provenance";
+import { sanitizeDataUrl, sanitizeFilename } from "@/lib/validation/schemas";
 
 export interface IProvenanceStorage {
   getProjects(): Promise<ArtworkProject[]>;
@@ -47,17 +48,29 @@ export function sanitizeProject(record: unknown): ArtworkProject | null {
   const updatedAt =
     typeof p.updatedAt === "string" && p.updatedAt ? p.updatedAt : createdAt;
 
-  let primaryArtwork = p.primaryArtwork as ArtworkProject["primaryArtwork"] | undefined;
+  let primaryArtwork: ArtworkProject["primaryArtwork"];
+  const rawArtwork = p.primaryArtwork as Record<string, unknown> | undefined;
   if (
-    !primaryArtwork ||
-    typeof primaryArtwork !== "object" ||
-    typeof primaryArtwork.sha256Hash !== "string"
+    !rawArtwork ||
+    typeof rawArtwork !== "object" ||
+    typeof rawArtwork.sha256Hash !== "string"
   ) {
     primaryArtwork = {
-      name: `${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-master.png`,
+      name: `${sanitizeFilename(title, "artwork")}-master.png`,
       mimeType: "image/png",
       sizeBytes: 0,
       sha256Hash: "0000000000000000000000000000000000000000000000000000000000000000",
+    };
+  } else {
+    primaryArtwork = {
+      name: sanitizeFilename(
+        typeof rawArtwork.name === "string" ? rawArtwork.name : `${title}-master.png`,
+        "master-artwork.png"
+      ),
+      mimeType: typeof rawArtwork.mimeType === "string" ? rawArtwork.mimeType : "image/png",
+      sizeBytes: typeof rawArtwork.sizeBytes === "number" ? rawArtwork.sizeBytes : 0,
+      sha256Hash: rawArtwork.sha256Hash,
+      dataUrl: sanitizeDataUrl(rawArtwork.dataUrl),
     };
   }
 
@@ -68,22 +81,98 @@ export function sanitizeProject(record: unknown): ArtworkProject | null {
       (ev): ev is TimelineEvent =>
         Boolean(ev && typeof ev === "object" && "id" in ev && "sequence" in ev)
     )
-    .map((ev, index) => ({
-      schemaVersion: 1,
-      id: String(ev.id || `evt_${index}`),
-      projectId: String(ev.projectId || id),
-      sequence: typeof ev.sequence === "number" ? ev.sequence : index,
-      eventType: ev.eventType || (index === 0 ? "PROJECT_CREATED" : "MILESTONE_LOGGED"),
-      timestamp: typeof ev.timestamp === "string" ? ev.timestamp : createdAt,
-      data: (ev.data && typeof ev.data === "object"
-        ? ev.data
-        : { title: "Recorded Milestone" }) as TimelineEvent["data"],
-      previousDigest: ev.previousDigest ?? null,
-      currentDigest:
-        typeof ev.currentDigest === "string"
-          ? ev.currentDigest
-          : "0000000000000000000000000000000000000000000000000000000000000000",
+    .map((ev, index) => {
+      const rawData =
+        ev.data && typeof ev.data === "object"
+          ? (ev.data as Record<string, unknown>)
+          : {};
+      const cleanData: Record<string, unknown> = {
+        title: "Recorded Milestone",
+        ...rawData,
+      };
+
+      if (Array.isArray(cleanData.evidence)) {
+        cleanData.evidence = (cleanData.evidence as unknown[]).map((evi) => {
+          if (!evi || typeof evi !== "object") return evi;
+          const eObj = evi as Record<string, unknown>;
+          return {
+            ...eObj,
+            name: sanitizeFilename(String(eObj.name || "evidence.png"), "evidence.png"),
+            fileDataUrl: sanitizeDataUrl(eObj.fileDataUrl),
+          };
+        });
+      }
+
+      return {
+        schemaVersion: 1,
+        id: String(ev.id || `evt_${index}`),
+        projectId: String(ev.projectId || id),
+        sequence: typeof ev.sequence === "number" ? ev.sequence : index,
+        eventType: ev.eventType || (index === 0 ? "PROJECT_CREATED" : "MILESTONE_LOGGED"),
+        timestamp: typeof ev.timestamp === "string" ? ev.timestamp : createdAt,
+        data: cleanData as TimelineEvent["data"],
+        previousDigest: ev.previousDigest ?? null,
+        currentDigest:
+          typeof ev.currentDigest === "string"
+            ? ev.currentDigest
+            : "0000000000000000000000000000000000000000000000000000000000000000",
+      };
+    });
+
+  // Ensure versions array is resilient and valid
+  const rawVersions = Array.isArray(p.versions) ? p.versions : [];
+  let versions: ArtworkVersion[] = rawVersions
+    .filter(
+      (v): v is ArtworkVersion =>
+        Boolean(v && typeof v === "object" && "id" in v && "versionLabel" in v)
+    )
+    .map((v, index) => ({
+      id: String(v.id || `ver_${index + 1}`),
+      projectId: String(v.projectId || id),
+      versionNumber: typeof v.versionNumber === "number" ? v.versionNumber : index + 1,
+      versionLabel: String(v.versionLabel || `v${index + 1}.0`),
+      createdAt: typeof v.createdAt === "string" ? v.createdAt : createdAt,
+      notes: typeof v.notes === "string" ? v.notes : undefined,
+      hasFile: Boolean(v.hasFile),
+      file:
+        v.file && typeof v.file === "object" && typeof v.file.sha256Hash === "string"
+          ? {
+              name: sanitizeFilename(String(v.file.name || "artwork-version.png"), "artwork-version.png"),
+              mimeType: String(v.file.mimeType || "image/png"),
+              sizeBytes: typeof v.file.sizeBytes === "number" ? v.file.sizeBytes : 0,
+              sha256Hash: v.file.sha256Hash,
+              algorithm: "SHA-256" as const,
+              dataUrl: sanitizeDataUrl(v.file.dataUrl),
+            }
+          : undefined,
+      associatedEventId: typeof v.associatedEventId === "string" ? v.associatedEventId : undefined,
     }));
+
+  if (versions.length === 0) {
+    versions = [
+      {
+        id: `ver_init_${id}`,
+        projectId: id,
+        versionNumber: 1,
+        versionLabel: "v1.0 Genesis",
+        createdAt,
+        notes: "Initial registered artwork master",
+        hasFile: Boolean(
+          primaryArtwork.sha256Hash &&
+          primaryArtwork.sha256Hash !== "0000000000000000000000000000000000000000000000000000000000000000"
+        ),
+        file: {
+          name: primaryArtwork.name,
+          mimeType: primaryArtwork.mimeType,
+          sizeBytes: primaryArtwork.sizeBytes,
+          sha256Hash: primaryArtwork.sha256Hash,
+          algorithm: "SHA-256",
+          dataUrl: primaryArtwork.dataUrl,
+        },
+        associatedEventId: events[0]?.id,
+      },
+    ];
+  }
 
   return {
     id,
@@ -96,6 +185,7 @@ export function sanitizeProject(record: unknown): ArtworkProject | null {
     updatedAt,
     primaryArtwork,
     events,
+    versions,
     isDemo: Boolean(p.isDemo),
   };
 }
@@ -161,7 +251,15 @@ function writeToLocalStorage(projects: ArtworkProject[]): void {
         }
         return { ...ev, data: cleanData };
       });
-      return { ...rest, primaryArtwork: cleanArtwork, events: cleanEvents };
+      const cleanVersions = (proj.versions || []).map((ver) => {
+        if (ver.file?.dataUrl && ver.file.dataUrl.length > 50000) {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          const { dataUrl, ...restFile } = ver.file;
+          return { ...ver, file: restFile };
+        }
+        return ver;
+      });
+      return { ...rest, primaryArtwork: cleanArtwork, events: cleanEvents, versions: cleanVersions };
     });
     window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(streamlined));
   } catch {

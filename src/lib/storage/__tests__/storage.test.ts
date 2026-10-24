@@ -251,4 +251,82 @@ describe("Storage Provider & Demo Data Suite", () => {
     expect(all[0].id).toBe("proj_newer");
     expect(all[1].id).toBe("proj_older");
   });
+
+  it("sanitizes unsafe filenames and blocks remote/script data URLs in storage", async () => {
+    const dangerousRecord = {
+      id: "proj_dangerous_input",
+      title: "Attack Test",
+      artistName: "Hacker",
+      medium: "Digital",
+      yearCreated: 2026,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      primaryArtwork: {
+        name: "../../etc/passwd",
+        mimeType: "image/png",
+        sizeBytes: 100,
+        sha256Hash: "1111111111111111111111111111111111111111111111111111111111111111",
+        dataUrl: "http://malicious-telemetry.example.com/log.png",
+      },
+      events: [
+        {
+          schemaVersion: 1,
+          id: "evt_1",
+          projectId: "proj_dangerous_input",
+          sequence: 0,
+          eventType: "MILESTONE_LOGGED",
+          timestamp: new Date().toISOString(),
+          data: {
+            title: "Test",
+            evidence: [
+              {
+                id: "evi_1",
+                name: "..\\..\\sensitive\\data.txt",
+                mimeType: "image/png",
+                sizeBytes: 50,
+                sha256Hash: "2222222222222222222222222222222222222222222222222222222222222222",
+                fileDataUrl: "javascript:alert(document.cookie)",
+              },
+            ],
+          },
+          previousDigest: null,
+          currentDigest: "3333333333333333333333333333333333333333333333333333333333333333",
+        },
+      ],
+      versions: [
+        {
+          id: "ver_1",
+          projectId: "proj_dangerous_input",
+          versionNumber: 1,
+          versionLabel: "v1.0",
+          createdAt: new Date().toISOString(),
+          hasFile: true,
+          file: {
+            name: "C:\\Windows\\System32\\cmd.exe",
+            mimeType: "image/png",
+            sizeBytes: 100,
+            sha256Hash: "4444444444444444444444444444444444444444444444444444444444444444",
+            algorithm: "SHA-256",
+            dataUrl: "https://external.leak.site/art.jpg",
+          },
+        },
+      ],
+    };
+
+    const sanitized = sanitizeProject(dangerousRecord);
+    expect(sanitized).not.toBeNull();
+    // Path traversal in filename stripped
+    expect(sanitized?.primaryArtwork.name).toBe("etc-passwd");
+    // Remote HTTP URL blocked
+    expect(sanitized?.primaryArtwork.dataUrl).toBeUndefined();
+
+    // Evidence filename sanitized and javascript: blocked
+    const evidenceItem = (sanitized?.events[0].data as Record<string, unknown>).evidence as Array<Record<string, unknown>>;
+    expect(evidenceItem[0].name).toBe("sensitive-data.txt");
+    expect(evidenceItem[0].fileDataUrl).toBeUndefined();
+
+    // Version file path sanitized and HTTPS URL blocked
+    expect(sanitized?.versions?.[0].file?.name).toBe("C-Windows-System32-cmd.exe");
+    expect(sanitized?.versions?.[0].file?.dataUrl).toBeUndefined();
+  });
 });

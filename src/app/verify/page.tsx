@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import {
   ShieldCheck,
   Upload,
@@ -9,6 +10,8 @@ import {
   XCircle,
   Sparkles,
   Layers,
+  FolderDown,
+  ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -16,9 +19,14 @@ import { Badge } from "@/components/ui/Badge";
 import { HashViewer } from "@/components/ui/HashViewer";
 import { DisclaimerBanner } from "@/components/ui/DisclaimerBanner";
 import { verifyProvenanceManifest, buildProvenanceManifest } from "@/lib/crypto/manifest";
-import { manifestImportSchema } from "@/lib/validation/schemas";
 import { generateDemoProject } from "@/lib/storage/demo-data";
-import { ProvenanceManifest, VerificationReport, VerificationStatus } from "@/types/provenance";
+import { storage } from "@/lib/storage/storage-provider";
+import {
+  ArtworkProject,
+  ProvenanceManifest,
+  VerificationReport,
+  VerificationStatus,
+} from "@/types/provenance";
 
 export default function VerificationPage() {
   const [manifestText, setManifestText] = useState("");
@@ -31,6 +39,8 @@ export default function VerificationPage() {
   const [report, setReport] = useState<VerificationReport | null>(null);
   const [verifying, setVerifying] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const handleManifestFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -38,20 +48,27 @@ export default function VerificationPage() {
 
     setErrorMessage("");
     setReport(null);
+    setImportSuccess(null);
+
+    // Strict 2MB safety limit
+    if (file.size > 2 * 1024 * 1024) {
+      setErrorMessage("Manifest file size exceeds the 2MB safety limit.");
+      setParsedManifest(null);
+      return;
+    }
 
     try {
       const text = await file.text();
       setManifestText(text);
 
       const parsed = JSON.parse(text);
-      const val = manifestImportSchema.safeParse(parsed);
-      if (!val.success) {
-        setErrorMessage(`Manifest schema error: ${val.error.issues[0]?.message || "Invalid structure"}`);
+      if (typeof parsed !== "object" || parsed === null) {
+        setErrorMessage("File does not contain a valid JSON object.");
         setParsedManifest(null);
         return;
       }
 
-      setParsedManifest(val.data as ProvenanceManifest);
+      setParsedManifest(parsed as ProvenanceManifest);
     } catch (err) {
       setErrorMessage(`Failed to read manifest JSON file: ${String(err)}`);
       setParsedManifest(null);
@@ -62,23 +79,29 @@ export default function VerificationPage() {
     setManifestText(text);
     setReport(null);
     setErrorMessage("");
+    setImportSuccess(null);
 
     if (!text.trim()) {
       setParsedManifest(null);
       return;
     }
 
+    // Strict 2MB safety limit for pasted input to prevent UI thread lock
+    if (text.length > 2 * 1024 * 1024) {
+      setErrorMessage("Pasted manifest text exceeds the 2MB safety limit.");
+      setParsedManifest(null);
+      return;
+    }
+
     try {
       const parsed = JSON.parse(text);
-      const val = manifestImportSchema.safeParse(parsed);
-      if (!val.success) {
-        setErrorMessage(`Invalid manifest JSON: ${val.error.issues[0]?.message || "Schema mismatch"}`);
+      if (typeof parsed === "object" && parsed !== null) {
+        setParsedManifest(parsed as ProvenanceManifest);
+      } else {
         setParsedManifest(null);
-        return;
       }
-      setParsedManifest(val.data as ProvenanceManifest);
     } catch {
-      // Allow user to continue typing or pasting
+      // User may still be typing or pasting
       setParsedManifest(null);
     }
   };
@@ -86,6 +109,7 @@ export default function VerificationPage() {
   const handleLoadDemoManifest = async () => {
     setVerifying(true);
     setErrorMessage("");
+    setImportSuccess(null);
     try {
       const demoProject = await generateDemoProject();
       const demoManifest = buildProvenanceManifest(demoProject);
@@ -112,6 +136,7 @@ export default function VerificationPage() {
 
     setVerifying(true);
     setErrorMessage("");
+    setImportSuccess(null);
 
     try {
       const rep = await verifyProvenanceManifest(parsedManifest, artworkFile || undefined);
@@ -123,18 +148,65 @@ export default function VerificationPage() {
     }
   };
 
+  const handleImportToStudio = async () => {
+    if (!parsedManifest || !report?.isValid) return;
+    setImporting(true);
+    try {
+      const projectToImport: ArtworkProject = {
+        id: parsedManifest.project.id || `proj_${Date.now()}`,
+        title: parsedManifest.project.title || "Imported Verified Artwork",
+        artistName: parsedManifest.project.artistName || "Unknown Artist",
+        medium: parsedManifest.project.medium || "Mixed Media",
+        yearCreated: parsedManifest.project.yearCreated || new Date().getFullYear(),
+        description: parsedManifest.project.description || "",
+        createdAt: parsedManifest.project.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        primaryArtwork: {
+          name: parsedManifest.project.primaryArtwork.name,
+          mimeType: parsedManifest.project.primaryArtwork.mimeType,
+          sizeBytes: parsedManifest.project.primaryArtwork.sizeBytes,
+          sha256Hash: parsedManifest.project.primaryArtwork.sha256Hash,
+        },
+        versions: (parsedManifest.versions || []).map((v) => ({
+          id: v.id,
+          projectId: parsedManifest.project.id || `proj_${Date.now()}`,
+          versionNumber: v.versionNumber,
+          versionLabel: v.versionLabel,
+          createdAt: v.createdAt,
+          hasFile: v.hasFile,
+          notes: v.notes,
+          sha256Hash: v.sha256Hash,
+          fileName: v.fileName,
+          fileSizeBytes: v.fileSizeBytes,
+          isArchivalFinal: v.isArchivalFinal,
+        })),
+        events: parsedManifest.eventChain,
+        isDemo: false,
+      };
+
+      await storage.saveProject(projectToImport);
+      setImportSuccess(`Successfully imported "${projectToImport.title}" to your Studio library.`);
+    } catch (err) {
+      setErrorMessage(`Failed to import project: ${String(err)}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const getStatusBadge = (status: VerificationStatus) => {
     switch (status) {
       case "PASSED":
-        return <Badge variant="sage" size="md">Integrity Checks Passed</Badge>;
+        return <Badge variant="sage" size="md">Integrity check passed</Badge>;
       case "FAILED_FILE_MISMATCH":
-        return <Badge variant="danger" size="md">Artwork File Mismatch</Badge>;
+        return <Badge variant="danger" size="md">Integrity mismatch</Badge>;
       case "FAILED_CHAIN_INTEGRITY":
-        return <Badge variant="danger" size="md">Event Chain Integrity Failed</Badge>;
+        return <Badge variant="danger" size="md">Integrity mismatch</Badge>;
+      case "UNSUPPORTED_FORMAT":
+        return <Badge variant="parchment" size="md">Unsupported format</Badge>;
       case "MALFORMED_MANIFEST":
-        return <Badge variant="danger" size="md">Malformed Manifest</Badge>;
+        return <Badge variant="danger" size="md">Invalid passport</Badge>;
       case "INSUFFICIENT_DATA":
-        return <Badge variant="parchment" size="md">Insufficient Data</Badge>;
+        return <Badge variant="parchment" size="md">Incomplete evidence</Badge>;
     }
   };
 
@@ -289,10 +361,16 @@ export default function VerificationPage() {
               <div className="flex items-center gap-2.5">
                 <h2 className="text-xl font-serif font-bold text-[#1C1917]">
                   {report.status === "PASSED"
-                    ? "Cryptographic Verification Passed"
+                    ? "Integrity Check Passed"
                     : report.status === "FAILED_FILE_MISMATCH"
-                    ? "Artwork File Digest Mismatch"
-                    : "Chain Integrity Failure"}
+                    ? "Integrity Mismatch (Artwork File)"
+                    : report.status === "FAILED_CHAIN_INTEGRITY"
+                    ? "Integrity Mismatch (Event Chain)"
+                    : report.status === "UNSUPPORTED_FORMAT"
+                    ? "Unsupported Format"
+                    : report.status === "MALFORMED_MANIFEST"
+                    ? "Invalid Passport"
+                    : "Incomplete Evidence"}
                 </h2>
                 {getStatusBadge(report.status)}
               </div>
@@ -302,6 +380,139 @@ export default function VerificationPage() {
               Checked at: {new Date(report.checkedAt).toLocaleTimeString()}
             </div>
           </div>
+
+          {/* 6-Point Cryptographic Audit Checklist */}
+          <div className="p-4 rounded-xl border border-[#E8E2D5] bg-[#FAF7F0] space-y-3 text-xs">
+            <span className="font-semibold text-[#1C1917] block">
+              Cryptographic Audit Checklist:
+            </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.status !== "MALFORMED_MANIFEST" && report.status !== "UNSUPPORTED_FORMAT" ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Manifest Schema & Format</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    v1.0.0 specification & canonical JSON encoding
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.chainValid || (report.isValid && report.status === "PASSED") ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Genesis Anchor</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    Sequence #0 anchored with verified null predecessor
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.chainValid || (report.isValid && report.status === "PASSED") ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Hash Predecessor Linkage</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    Sequential chain pointers unbroken across all events
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.chainValid || (report.isValid && report.status === "PASSED") ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Preimage SHA-256 Digest</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    All canonical payload hashes recomputed independently
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.chainValid || (report.isValid && report.status === "PASSED") ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Head Digest Consistency</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    Summary head matches calculated chain terminus
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-2 p-2.5 bg-white rounded-lg border border-[#E8E2D5]">
+                {report.artworkMatch === true ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : report.artworkMatch === false ? (
+                  <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                ) : (
+                  <span className="w-4 h-4 rounded-full border border-[#D6CEBE] bg-[#F3EFE6] text-[10px] flex items-center justify-center shrink-0 mt-0.5 text-[#78716C]">
+                    -
+                  </span>
+                )}
+                <div>
+                  <span className="font-semibold block text-[#1C1917]">Artwork Byte Match</span>
+                  <p className="text-[10px] text-[#78716C]">
+                    {report.artworkMatch === true
+                      ? "Tested master byte hash matches manifest"
+                      : report.artworkMatch === false
+                      ? "File byte mismatch with recorded hash"
+                      : "Optional test file not supplied"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Optional Import to Studio Action */}
+          {report.isValid && parsedManifest?.project && (
+            <div className="p-4 bg-[#EBF2EE] border border-[#C5D8CE] rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+              <div>
+                <span className="font-semibold text-sm text-[#2D4538] block">
+                  Valid ArtProof Provenance Record
+                </span>
+                <p className="text-[#375244] text-[11px] mt-0.5">
+                  You can save this verified record to your browser storage and view it in your Studio.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {importSuccess ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-emerald-800 font-semibold">{importSuccess}</span>
+                    <Link href={`/projects/${parsedManifest.project.id}`}>
+                      <Button size="sm" variant="outline">
+                        View Project
+                        <ArrowRight className="w-3.5 h-3.5 ml-1" />
+                      </Button>
+                    </Link>
+                  </div>
+                ) : (
+                  <Button size="sm" onClick={handleImportToStudio} isLoading={importing}>
+                    <FolderDown className="w-3.5 h-3.5 mr-1" />
+                    Import to Studio Library
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Explanation Text */}
           <div className="p-4 rounded-xl bg-[#FAF7F0] border border-[#E8E2D5] text-xs space-y-2">

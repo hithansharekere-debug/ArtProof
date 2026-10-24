@@ -4,6 +4,9 @@ import {
   milestoneInputSchema,
   validateArtworkFile,
   manifestImportSchema,
+  sanitizeFilename,
+  isSafeDataUrl,
+  sanitizeDataUrl,
 } from "../schemas";
 
 describe("Validation Schemas Suite", () => {
@@ -221,6 +224,68 @@ describe("Validation Schemas Suite", () => {
 
       const res = manifestImportSchema.safeParse(invalidHashManifest);
       expect(res.success).toBe(false);
+    });
+  });
+
+  describe("Filename Sanitization Security Suite", () => {
+    it("strips path traversal sequences", () => {
+      expect(sanitizeFilename("../../etc/passwd")).toBe("etc-passwd");
+      expect(sanitizeFilename("..\\Windows\\System32\\cmd.exe")).toBe("Windows-System32-cmd.exe");
+      expect(sanitizeFilename("../../../payload.png")).toBe("payload.png");
+    });
+
+    it("strips illegal characters and control codes", () => {
+      expect(sanitizeFilename('art<work>:test"file|name?.png')).toBe("artworktestfilename.png");
+      expect(sanitizeFilename("null\x00byte\x1fattack.png")).toBe("nullbyteattack.png");
+    });
+
+    it("handles spaces and leading/trailing dots", () => {
+      expect(sanitizeFilename("   my artwork title   ")).toBe("my-artwork-title");
+      expect(sanitizeFilename("...hidden.png...")).toBe("hidden.png");
+    });
+
+    it("truncates names exceeding safe length while preserving extension", () => {
+      const veryLong = "a".repeat(100) + ".png";
+      const cleaned = sanitizeFilename(veryLong);
+      expect(cleaned.length).toBeLessThanOrEqual(64);
+      expect(cleaned.endsWith(".png")).toBe(true);
+    });
+
+    it("falls back safely when input is empty or contains only invalid characters", () => {
+      expect(sanitizeFilename("")).toBe("artwork");
+      expect(sanitizeFilename("   ")).toBe("artwork");
+      expect(sanitizeFilename("...///???")).toBe("artwork");
+      expect(sanitizeFilename("", "custom-fallback")).toBe("custom-fallback");
+    });
+  });
+
+  describe("Safe Data URL & Privacy Leak Prevention Suite", () => {
+    it("accepts valid base64 image data URLs", () => {
+      const validPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      expect(isSafeDataUrl(validPng)).toBe(true);
+      expect(sanitizeDataUrl(validPng)).toBe(validPng);
+
+      const validJpeg = "data:image/jpeg;base64,/9j/4AAQSkZJRg==";
+      expect(isSafeDataUrl(validJpeg)).toBe(true);
+    });
+
+    it("rejects remote URLs to prevent network calls and privacy leaks", () => {
+      expect(isSafeDataUrl("http://tracker.artproof.attacker/pixel.png")).toBe(false);
+      expect(isSafeDataUrl("https://example.com/artwork.jpg")).toBe(false);
+      expect(sanitizeDataUrl("http://tracker.artproof.attacker/pixel.png")).toBeUndefined();
+      expect(sanitizeDataUrl("https://example.com/artwork.jpg")).toBeUndefined();
+    });
+
+    it("rejects executable script protocols", () => {
+      expect(isSafeDataUrl("javascript:alert(1)")).toBe(false);
+      expect(isSafeDataUrl("vbscript:MsgBox(1)")).toBe(false);
+      expect(sanitizeDataUrl("javascript:alert(1)")).toBeUndefined();
+    });
+
+    it("rejects non-image, non-pdf MIME types like text/html or application/javascript", () => {
+      expect(isSafeDataUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")).toBe(false);
+      expect(isSafeDataUrl("data:application/javascript;base64,YWxlcnQoMSk=")).toBe(false);
+      expect(sanitizeDataUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")).toBeUndefined();
     });
   });
 });

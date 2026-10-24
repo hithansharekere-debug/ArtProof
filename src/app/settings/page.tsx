@@ -28,6 +28,7 @@ export default function SettingsPage() {
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const [actionPending, setActionPending] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -59,6 +60,10 @@ export default function SettingsPage() {
   };
 
   const handleExportAll = async () => {
+    if (actionPending) return;
+    setActionPending(true);
+    setStatusMessage("");
+    setErrorMessage("");
     try {
       const all = await storage.getProjects();
       const backupData = {
@@ -80,6 +85,8 @@ export default function SettingsPage() {
       setStatusMessage("All studio projects exported successfully.");
     } catch (err) {
       setErrorMessage(`Export failed: ${String(err)}`);
+    } finally {
+      setActionPending(false);
     }
   };
 
@@ -87,8 +94,17 @@ export default function SettingsPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (actionPending) return;
+    setActionPending(true);
     setStatusMessage("");
     setErrorMessage("");
+
+    // Maximum 10MB backup file limit
+    if (file.size > 10 * 1024 * 1024) {
+      setErrorMessage("Backup file size exceeds the 10MB safety limit.");
+      setActionPending(false);
+      return;
+    }
 
     try {
       const text = await file.text();
@@ -96,23 +112,32 @@ export default function SettingsPage() {
 
       if (!parsed.projects || !Array.isArray(parsed.projects)) {
         setErrorMessage("Invalid backup file: 'projects' array not found.");
+        setActionPending(false);
         return;
       }
 
+      let importedCount = 0;
       for (const proj of parsed.projects as ArtworkProject[]) {
-        if (proj.id && proj.title && Array.isArray(proj.events)) {
+        if (proj && typeof proj === "object" && proj.id && proj.title) {
           await storage.saveProject(proj);
+          importedCount++;
         }
       }
 
       await refreshStats();
-      setStatusMessage(`Successfully imported ${parsed.projects.length} project(s).`);
+      setStatusMessage(`Successfully imported ${importedCount} project(s) into studio storage.`);
     } catch (err) {
       setErrorMessage(`Failed to import backup: ${String(err)}`);
+    } finally {
+      setActionPending(false);
+      // Reset input value so re-selecting same file triggers change
+      e.target.value = "";
     }
   };
 
   const handleSeedDemo = async () => {
+    if (actionPending) return;
+    setActionPending(true);
     setStatusMessage("");
     setErrorMessage("");
     try {
@@ -122,15 +147,19 @@ export default function SettingsPage() {
       setStatusMessage("InnovArt 2027 demo project seeded into local storage.");
     } catch (err) {
       setErrorMessage(`Failed to seed demo: ${String(err)}`);
+    } finally {
+      setActionPending(false);
     }
   };
 
   const handleClearAll = async () => {
+    if (actionPending) return;
     if (
       confirm(
         "WARNING: This will permanently wipe all ArtProof projects and recorded timeline chains from this browser. This cannot be undone. Do you wish to continue?"
       )
     ) {
+      setActionPending(true);
       setStatusMessage("");
       setErrorMessage("");
       try {
@@ -139,6 +168,8 @@ export default function SettingsPage() {
         setStatusMessage("Local storage database cleared.");
       } catch (err) {
         setErrorMessage(`Failed to clear database: ${String(err)}`);
+      } finally {
+        setActionPending(false);
       }
     }
   };
@@ -218,28 +249,29 @@ export default function SettingsPage() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center gap-3 pt-2">
-          <Button variant="outline" size="sm" onClick={handleExportAll}>
+          <Button variant="outline" size="sm" onClick={handleExportAll} disabled={actionPending}>
             <Download className="w-3.5 h-3.5 mr-1" />
             Export Full Studio Backup (JSON)
           </Button>
 
-          <label className="cursor-pointer inline-flex items-center justify-center font-medium transition-all rounded-lg text-xs px-3 py-1.5 gap-1.5 bg-white/80 text-[#292524] border border-[#D6CEBE] hover:bg-[#F5F1EA]">
+          <label className={`inline-flex items-center justify-center font-medium transition-all rounded-lg text-xs px-3 py-1.5 gap-1.5 bg-white/80 text-[#292524] border border-[#D6CEBE] ${actionPending ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:bg-[#F5F1EA]"}`}>
             <Upload className="w-3.5 h-3.5" />
             Import Backup File
             <input
               type="file"
               accept=".json"
               onChange={handleImportBackup}
+              disabled={actionPending}
               className="hidden"
             />
           </label>
 
-          <Button variant="ghost" size="sm" onClick={handleSeedDemo}>
+          <Button variant="ghost" size="sm" onClick={handleSeedDemo} disabled={actionPending}>
             <Sparkles className="w-3.5 h-3.5 text-[#B86226] mr-1" />
             Re-seed Demo Project
           </Button>
 
-          <Button variant="danger" size="sm" onClick={handleClearAll} className="ml-auto">
+          <Button variant="danger" size="sm" onClick={handleClearAll} disabled={actionPending} className="ml-auto">
             <Trash2 className="w-3.5 h-3.5 mr-1" />
             Wipe Local Database
           </Button>

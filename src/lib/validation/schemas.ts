@@ -50,6 +50,37 @@ export const milestoneInputSchema = z.object({
   ]),
   notes: z.string().trim().max(2000).optional(),
   revisionReason: z.string().trim().max(500).optional(),
+  versionLabel: z.string().trim().max(40).optional(),
+});
+
+// Version recording schema
+export const versionInputSchema = z.object({
+  versionLabel: z
+    .string()
+    .trim()
+    .min(1, "Version label is required")
+    .max(40, "Version label cannot exceed 40 characters"),
+  notes: z
+    .string()
+    .trim()
+    .max(2000, "Version notes cannot exceed 2000 characters")
+    .optional()
+    .default(""),
+  milestonePhase: z
+    .enum([
+      "CONCEPT",
+      "SKETCH",
+      "BLOCK_IN",
+      "REFINEMENT",
+      "FINAL_TOUCHES",
+      "EXPORT",
+    ])
+    .default("REFINEMENT"),
+  hasFile: z.boolean().default(false),
+  fileHash: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, "File digest must be a valid 64-character SHA-256 hex string")
+    .optional(),
 });
 
 // File validation helper
@@ -106,6 +137,7 @@ export const manifestImportSchema = z.object({
         "EVIDENCE_ATTACHED",
         "ARTWORK_REVISED",
         "NOTE_RECORDED",
+        "VERSION_RECORDED",
       ]),
       timestamp: z.string(),
       data: z.record(z.string(), z.unknown()),
@@ -113,9 +145,23 @@ export const manifestImportSchema = z.object({
       currentDigest: z.string().regex(/^[a-fA-F0-9]{64}$/, "Invalid SHA-256 digest format"),
     })
   ),
+  versions: z
+    .array(
+      z.object({
+        id: z.string(),
+        versionNumber: z.number().int().min(1),
+        versionLabel: z.string(),
+        createdAt: z.string(),
+        notes: z.string().optional(),
+        hasFile: z.boolean(),
+        sha256Hash: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+      })
+    )
+    .optional(),
   summary: z.object({
     totalEvents: z.number(),
     totalEvidenceFiles: z.number(),
+    totalVersions: z.number().optional(),
     headDigest: z.string(),
   }),
   declarations: z.object({
@@ -124,3 +170,64 @@ export const manifestImportSchema = z.object({
     limitationsDisclaimer: z.string(),
   }),
 });
+
+/**
+ * Strips path traversal characters, invalid OS characters, and control codes from filenames.
+ * Enforces a maximum safe length and falls back to a safe default if input is empty or invalid.
+ */
+export function sanitizeFilename(name: string, fallback = "artwork"): string {
+  if (!name || typeof name !== "string") {
+    return fallback;
+  }
+
+  // Strip path traversal sequences like ../ and ..\
+  let cleaned = name
+    .replace(/\.{2,}[/\\]+/g, "") // strip leading or embedded ../ or ..\
+    .replace(/[/\\]+/g, "-") // convert remaining directory separators to dash
+    .replace(/[<>:"|?*\x00-\x1f\x7f-\x9f]/g, "") // strip invalid file and control chars
+    .replace(/\.{2,}/g, ".") // collapse consecutive dots
+    .replace(/\s+/g, "-") // convert spaces to dash
+    .replace(/[-_]{2,}/g, "-") // collapse repeated dashes
+    .trim()
+    .replace(/^[.\s\-_]+|[.\s\-_]+$/g, ""); // strip leading/trailing dots, dashes, underscores
+
+  // Enforce max length of 64 characters
+  if (cleaned.length > 64) {
+    const extMatch = cleaned.match(/\.([a-zA-Z0-9]{1,8})$/);
+    if (extMatch) {
+      const ext = extMatch[0];
+      cleaned = cleaned.substring(0, 64 - ext.length) + ext;
+    } else {
+      cleaned = cleaned.substring(0, 64);
+    }
+  }
+
+  // If sanitized result is empty or just dashes/dots
+  if (!cleaned || /^[.\-_]+$/.test(cleaned)) {
+    return fallback;
+  }
+
+  return cleaned;
+}
+
+/**
+ * Validates that a string is a strictly local, safe image or document data URL.
+ * Rejects remote schemes (http/https), executable protocols (javascript/vbscript),
+ * and malformed payloads.
+ */
+export function isSafeDataUrl(url: unknown): url is string {
+  if (typeof url !== "string" || !url.startsWith("data:")) {
+    return false;
+  }
+
+  // Strictly allow only verified image types and pdf
+  const safePrefixRegex = /^data:(image\/(png|jpeg|jpg|webp|svg\+xml|avif)|application\/pdf);base64,[A-Za-z0-9+/=]+$/;
+  return safePrefixRegex.test(url);
+}
+
+/**
+ * Sanitizes an untrusted data URL, returning undefined if invalid or remote.
+ */
+export function sanitizeDataUrl(url: unknown): string | undefined {
+  return isSafeDataUrl(url) ? url : undefined;
+}
