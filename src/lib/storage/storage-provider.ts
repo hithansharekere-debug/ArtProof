@@ -1,5 +1,10 @@
 import { ArtworkProject, ArtworkVersion, TimelineEvent } from "@/types/provenance";
-import { sanitizeDataUrl, sanitizeFilename } from "@/lib/validation/schemas";
+import {
+  manifestImportSchema,
+  projectInputSchema,
+  sanitizeDataUrl,
+  sanitizeFilename,
+} from "@/lib/validation/schemas";
 
 export interface IProvenanceStorage {
   getProjects(): Promise<ArtworkProject[]>;
@@ -14,6 +19,41 @@ const DB_NAME = "artproof_db";
 const DB_VERSION = 1;
 const STORE_PROJECTS = "projects";
 const LOCAL_STORAGE_KEY = "artproof_projects_v1";
+
+/**
+ * Builds the canonical initial v1.0 Genesis version record linked to the genesis event.
+ */
+export function createGenesisVersion(params: {
+  projectId: string;
+  createdAt: string;
+  primaryArtwork: ArtworkProject["primaryArtwork"];
+  genesisEventId?: string;
+  hasFile?: boolean;
+}): ArtworkVersion {
+  const hasValidHash = Boolean(
+    params.primaryArtwork.sha256Hash &&
+      params.primaryArtwork.sha256Hash !==
+        "0000000000000000000000000000000000000000000000000000000000000000"
+  );
+  return {
+    id: `ver_init_${params.projectId}`,
+    projectId: params.projectId,
+    versionNumber: 1,
+    versionLabel: "v1.0 Genesis",
+    createdAt: params.createdAt,
+    notes: "Initial registered artwork master",
+    hasFile: params.hasFile ?? hasValidHash,
+    file: {
+      name: params.primaryArtwork.name,
+      mimeType: params.primaryArtwork.mimeType,
+      sizeBytes: params.primaryArtwork.sizeBytes,
+      sha256Hash: params.primaryArtwork.sha256Hash,
+      algorithm: "SHA-256",
+      dataUrl: params.primaryArtwork.dataUrl,
+    },
+    associatedEventId: params.genesisEventId,
+  };
+}
 
 /**
  * Sanitizes and repairs untrusted or potentially corrupted stored project data.
@@ -119,58 +159,68 @@ export function sanitizeProject(record: unknown): ArtworkProject | null {
       };
     });
 
-  // Ensure versions array is resilient and valid
+  // Ensure versions array is resilient, deduplicated, and valid
   const rawVersions = Array.isArray(p.versions) ? p.versions : [];
-  let versions: ArtworkVersion[] = rawVersions
-    .filter(
-      (v): v is ArtworkVersion =>
-        Boolean(v && typeof v === "object" && "id" in v && "versionLabel" in v)
-    )
-    .map((v, index) => ({
-      id: String(v.id || `ver_${index + 1}`),
+  const seenVersionIds = new Set<string>();
+  let versions: ArtworkVersion[] = [];
+
+  rawVersions.forEach((rawVer, index) => {
+    if (!rawVer || typeof rawVer !== "object" || !("id" in rawVer) || !("versionLabel" in rawVer)) {
+      return;
+    }
+    const v = rawVer as ArtworkVersion;
+    const versionId = String(v.id || `ver_${index + 1}`);
+    if (seenVersionIds.has(versionId)) {
+      return;
+    }
+    seenVersionIds.add(versionId);
+
+    const sanitizedFile =
+      v.file && typeof v.file === "object" && typeof v.file.sha256Hash === "string"
+        ? {
+            name: sanitizeFilename(String(v.file.name || "artwork-version.png"), "artwork-version.png"),
+            mimeType: String(v.file.mimeType || "image/png"),
+            sizeBytes: typeof v.file.sizeBytes === "number" ? v.file.sizeBytes : 0,
+            sha256Hash: v.file.sha256Hash,
+            algorithm: "SHA-256" as const,
+            dataUrl: sanitizeDataUrl(v.file.dataUrl),
+          }
+        : undefined;
+
+    const topLevelDataUrl = sanitizeDataUrl(v.dataUrl);
+
+    const sanitizedVersion: ArtworkVersion = {
+      id: versionId,
       projectId: String(v.projectId || id),
-      versionNumber: typeof v.versionNumber === "number" ? v.versionNumber : index + 1,
-      versionLabel: String(v.versionLabel || `v${index + 1}.0`),
+      versionNumber: typeof v.versionNumber === "number" ? v.versionNumber : versions.length + 1,
+      versionLabel: String(v.versionLabel || `v${versions.length + 1}.0`),
       createdAt: typeof v.createdAt === "string" ? v.createdAt : createdAt,
       notes: typeof v.notes === "string" ? v.notes : undefined,
       hasFile: Boolean(v.hasFile),
-      file:
-        v.file && typeof v.file === "object" && typeof v.file.sha256Hash === "string"
-          ? {
-              name: sanitizeFilename(String(v.file.name || "artwork-version.png"), "artwork-version.png"),
-              mimeType: String(v.file.mimeType || "image/png"),
-              sizeBytes: typeof v.file.sizeBytes === "number" ? v.file.sizeBytes : 0,
-              sha256Hash: v.file.sha256Hash,
-              algorithm: "SHA-256" as const,
-              dataUrl: sanitizeDataUrl(v.file.dataUrl),
-            }
-          : undefined,
+      file: sanitizedFile,
       associatedEventId: typeof v.associatedEventId === "string" ? v.associatedEventId : undefined,
-    }));
+      ...(typeof v.sha256Hash === "string" ? { sha256Hash: v.sha256Hash } : {}),
+      ...(typeof v.fileName === "string"
+        ? { fileName: sanitizeFilename(v.fileName, "artwork-version.png") }
+        : {}),
+      ...(typeof v.fileSizeBytes === "number" ? { fileSizeBytes: v.fileSizeBytes } : {}),
+      ...(typeof v.mimeType === "string" ? { mimeType: v.mimeType } : {}),
+      ...(typeof v.isArchivalFinal === "boolean" ? { isArchivalFinal: v.isArchivalFinal } : {}),
+      ...(typeof v.recordedAt === "string" ? { recordedAt: v.recordedAt } : {}),
+      ...(topLevelDataUrl !== undefined ? { dataUrl: topLevelDataUrl } : {}),
+    };
+
+    versions.push(sanitizedVersion);
+  });
 
   if (versions.length === 0) {
     versions = [
-      {
-        id: `ver_init_${id}`,
+      createGenesisVersion({
         projectId: id,
-        versionNumber: 1,
-        versionLabel: "v1.0 Genesis",
         createdAt,
-        notes: "Initial registered artwork master",
-        hasFile: Boolean(
-          primaryArtwork.sha256Hash &&
-          primaryArtwork.sha256Hash !== "0000000000000000000000000000000000000000000000000000000000000000"
-        ),
-        file: {
-          name: primaryArtwork.name,
-          mimeType: primaryArtwork.mimeType,
-          sizeBytes: primaryArtwork.sizeBytes,
-          sha256Hash: primaryArtwork.sha256Hash,
-          algorithm: "SHA-256",
-          dataUrl: primaryArtwork.dataUrl,
-        },
-        associatedEventId: events[0]?.id,
-      },
+        primaryArtwork,
+        genesisEventId: events[0]?.id,
+      }),
     ];
   }
 
@@ -231,39 +281,66 @@ function readFromLocalStorage(): ArtworkProject[] {
   }
 }
 
+/**
+ * Produces a non-mutating copy of a project suitable for the localStorage fallback
+ * by stripping large data URLs (> maxDataUrlLength) from primaryArtwork, events, and versions
+ * (both top-level ver.dataUrl and nested ver.file.dataUrl) while preserving all other metadata.
+ */
+export function streamlineProjectForLocalStorage(
+  proj: ArtworkProject,
+  maxDataUrlLength = 50000
+): ArtworkProject {
+  const { primaryArtwork, events, versions, ...rest } = proj;
+  const cleanArtwork = { ...primaryArtwork };
+  if (cleanArtwork.dataUrl && cleanArtwork.dataUrl.length > maxDataUrlLength) {
+    delete cleanArtwork.dataUrl;
+  }
+  const cleanEvents = events.map((ev) => {
+    const cleanData = { ...ev.data };
+    if (Array.isArray(cleanData.evidence)) {
+      cleanData.evidence = cleanData.evidence.map((evi) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { fileDataUrl, ...eRest } = evi;
+        return eRest;
+      });
+    }
+    return { ...ev, data: cleanData };
+  });
+  const cleanVersions = (versions || []).map((ver) => {
+    const cleanVer: ArtworkVersion = { ...ver };
+    if (cleanVer.dataUrl && cleanVer.dataUrl.length > maxDataUrlLength) {
+      delete cleanVer.dataUrl;
+    }
+    if (cleanVer.file) {
+      const cleanFile = { ...cleanVer.file };
+      if (cleanFile.dataUrl && cleanFile.dataUrl.length > maxDataUrlLength) {
+        delete cleanFile.dataUrl;
+      }
+      cleanVer.file = cleanFile;
+    }
+    return cleanVer;
+  });
+  return {
+    ...rest,
+    primaryArtwork: cleanArtwork,
+    events: cleanEvents,
+    versions: cleanVersions,
+  };
+}
+
 function writeToLocalStorage(projects: ArtworkProject[]): void {
   if (typeof window === "undefined") return;
   try {
-    const streamlined = projects.map((proj) => {
-      const { primaryArtwork, events, ...rest } = proj;
-      const cleanArtwork = { ...primaryArtwork };
-      if (cleanArtwork.dataUrl && cleanArtwork.dataUrl.length > 50000) {
-        delete cleanArtwork.dataUrl;
-      }
-      const cleanEvents = events.map((ev) => {
-        const cleanData = { ...ev.data };
-        if (Array.isArray(cleanData.evidence)) {
-          cleanData.evidence = cleanData.evidence.map((evi) => {
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { fileDataUrl, ...eRest } = evi;
-            return eRest;
-          });
-        }
-        return { ...ev, data: cleanData };
-      });
-      const cleanVersions = (proj.versions || []).map((ver) => {
-        if (ver.file?.dataUrl && ver.file.dataUrl.length > 50000) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { dataUrl, ...restFile } = ver.file;
-          return { ...ver, file: restFile };
-        }
-        return ver;
-      });
-      return { ...rest, primaryArtwork: cleanArtwork, events: cleanEvents, versions: cleanVersions };
-    });
+    const streamlined = projects.map((proj) => streamlineProjectForLocalStorage(proj, 50000));
     window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(streamlined));
   } catch {
-    // Quota exceeded or restricted context; silently ignore
+    // Quota exceeded with small previews; retry stripping all dataUrl previews to preserve core metadata
+    try {
+      const minimal = projects.map((proj) => streamlineProjectForLocalStorage(proj, 0));
+      window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(minimal));
+    } catch {
+      // Quota still exceeded or restricted context; safely ignore
+    }
   }
 }
 
@@ -466,3 +543,187 @@ export class IndexedDBStorage implements IProvenanceStorage {
 }
 
 export const storage = new IndexedDBStorage();
+
+export interface BackupImportResult {
+  success: boolean;
+  importedCount: number;
+  error?: string;
+}
+
+/**
+ * Validates and atomically imports a studio backup JSON or parsed object.
+ * Pre-validates every record with existing Zod schemas and sanitizeProject before
+ * persisting any record, preventing partial imports and protecting unrelated user projects.
+ */
+export async function importStudioBackup(
+  rawBackup: unknown,
+  targetStorage: IProvenanceStorage = storage
+): Promise<BackupImportResult> {
+  let parsed: unknown = rawBackup;
+
+  if (typeof rawBackup === "string") {
+    try {
+      parsed = JSON.parse(rawBackup);
+    } catch {
+      return {
+        success: false,
+        importedCount: 0,
+        error: "Invalid backup file: failed to parse JSON.",
+      };
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      success: false,
+      importedCount: 0,
+      error: "Invalid backup file: root value must be a JSON object.",
+    };
+  }
+
+  const root = parsed as Record<string, unknown>;
+
+  if (root.app !== undefined && root.app !== "ArtProof") {
+    return {
+      success: false,
+      importedCount: 0,
+      error: "Invalid backup file: unrecognized application identifier.",
+    };
+  }
+
+  if (!Array.isArray(root.projects)) {
+    return {
+      success: false,
+      importedCount: 0,
+      error: "Invalid backup file: 'projects' array not found.",
+    };
+  }
+
+  if (root.projects.length === 0) {
+    return {
+      success: false,
+      importedCount: 0,
+      error: "Invalid backup file: 'projects' array is empty.",
+    };
+  }
+
+  const primaryArtworkSchema = manifestImportSchema.shape.project.shape.primaryArtwork;
+  const eventChainSchema = manifestImportSchema.shape.eventChain;
+
+  const validatedProjects: ArtworkProject[] = [];
+
+  for (let i = 0; i < root.projects.length; i++) {
+    const rawItem = root.projects[i];
+    const recordLabel = `Record #${i + 1}`;
+
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: project entry must be an object.`,
+      };
+    }
+
+    const p = rawItem as Record<string, unknown>;
+
+    if (typeof p.id !== "string" || !p.id.trim()) {
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: valid project ID is required.`,
+      };
+    }
+
+    const metaResult = projectInputSchema.safeParse({
+      title: p.title,
+      artistName: p.artistName,
+      medium: p.medium,
+      yearCreated: p.yearCreated,
+      description: typeof p.description === "string" ? p.description : "",
+    });
+
+    if (!metaResult.success) {
+      const firstIssue = metaResult.error.issues[0];
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: ${firstIssue?.message || "invalid project metadata"}.`,
+      };
+    }
+
+    const artworkResult = primaryArtworkSchema.safeParse(p.primaryArtwork);
+    if (!artworkResult.success) {
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: invalid primaryArtwork record or SHA-256 digest.`,
+      };
+    }
+
+    const eventsResult = eventChainSchema.safeParse(p.events);
+    if (!eventsResult.success) {
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: invalid timeline events array.`,
+      };
+    }
+
+    if (p.versions !== undefined) {
+      if (
+        !Array.isArray(p.versions) ||
+        p.versions.some(
+          (v) =>
+            !v ||
+            typeof v !== "object" ||
+            typeof (v as Record<string, unknown>).id !== "string" ||
+            !String((v as Record<string, unknown>).id).trim() ||
+            typeof (v as Record<string, unknown>).versionLabel !== "string" ||
+            !String((v as Record<string, unknown>).versionLabel).trim()
+        )
+      ) {
+        return {
+          success: false,
+          importedCount: 0,
+          error: `Malformed backup at ${recordLabel}: invalid versions array.`,
+        };
+      }
+    }
+
+    const sanitized = sanitizeProject(p);
+    if (!sanitized) {
+      return {
+        success: false,
+        importedCount: 0,
+        error: `Malformed backup at ${recordLabel}: project failed sanitization.`,
+      };
+    }
+
+    // Protect unrelated existing user-created projects from accidental ID collision overwrite
+    const existing = await targetStorage.getProject(sanitized.id);
+    if (existing && !existing.isDemo) {
+      if (sanitized.isDemo) {
+        // Demo record cannot overwrite a user-created project; skip saving it
+        continue;
+      }
+      if (existing.createdAt !== sanitized.createdAt || existing.title !== sanitized.title) {
+        return {
+          success: false,
+          importedCount: 0,
+          error: `Import rejected at ${recordLabel}: project ID "${sanitized.id}" conflicts with an existing unrelated project ("${existing.title}").`,
+        };
+      }
+    }
+
+    validatedProjects.push(sanitized);
+  }
+
+  for (const proj of validatedProjects) {
+    await targetStorage.saveProject(proj);
+  }
+
+  return {
+    success: true,
+    importedCount: validatedProjects.length,
+  };
+}

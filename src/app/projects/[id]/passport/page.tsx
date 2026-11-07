@@ -205,7 +205,7 @@ export default function ProvenancePassportPage() {
         <div className="absolute top-0 right-0 w-48 h-48 bg-[#FBF0E6]/50 rounded-bl-full pointer-events-none -z-0" />
 
         {/* Certificate Header */}
-        <div className="relative z-10 flex flex-col sm:flex-row sm:items-start justify-between gap-6 border-b border-[#E8E2D5] pb-8">
+        <div className="passport-section relative z-10 flex flex-col sm:flex-row sm:items-start justify-between gap-6 border-b border-[#E8E2D5] pb-8">
           <div className="space-y-2">
             <div className="inline-flex items-center gap-2">
               <span className="font-serif font-bold text-xl tracking-tight text-[#1C1917]">
@@ -244,7 +244,7 @@ export default function ProvenancePassportPage() {
         </div>
 
         {/* Section 1: Artist-Provided Curatorial Claims */}
-        <div className="space-y-4">
+        <div className="passport-section space-y-4">
           <div className="flex items-center justify-between border-b border-[#E8E2D5]/70 pb-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-[#78716C] uppercase tracking-wider">
               <FileCheck className="w-4 h-4 text-[#B86226]" />
@@ -426,7 +426,7 @@ export default function ProvenancePassportPage() {
         </div>
 
         {/* Section 4: Cryptographic Ledger Anchor */}
-        <div className="p-4 rounded-xl bg-[#FAF7F0] border border-[#E8E2D5] space-y-3 text-xs">
+        <div className="passport-section p-4 rounded-xl bg-[#FAF7F0] border border-[#E8E2D5] space-y-3 text-xs">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#E8E2D5]/70 pb-2">
             <span className="font-serif font-semibold text-[#1C1917]">
               4. Cryptographic Head Anchor & Specification
@@ -445,7 +445,7 @@ export default function ProvenancePassportPage() {
         </div>
 
         {/* Section 5: Clear Limitations & Disclaimers Footer */}
-        <div className="pt-4 border-t border-[#E8E2D5] space-y-3 text-[11px] text-[#78716C] leading-relaxed">
+        <div className="passport-section pt-4 border-t border-[#E8E2D5] space-y-3 text-[11px] text-[#78716C] leading-relaxed">
           <div className="flex items-center gap-1.5 font-semibold text-[#1C1917] uppercase tracking-wider text-[10px]">
             <Info className="w-3.5 h-3.5 text-[#B86226]" />
             <span>Honest Verification Limitations & Scope</span>
@@ -479,6 +479,21 @@ export default function ProvenancePassportPage() {
             box-shadow: none !important;
             padding: 1.5rem !important;
             max-width: 100% !important;
+            overflow: visible !important;
+          }
+          .passport-container table {
+            break-inside: auto;
+            page-break-inside: auto;
+          }
+          .passport-container thead {
+            display: table-header-group;
+            break-inside: avoid;
+            page-break-inside: avoid;
+          }
+          .passport-container tr,
+          .passport-section {
+            break-inside: avoid;
+            page-break-inside: avoid;
           }
         }
       `}</style>

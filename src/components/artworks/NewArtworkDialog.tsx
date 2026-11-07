@@ -7,7 +7,7 @@ import { Dialog } from "@/components/ui/Dialog";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
-import { storage } from "@/lib/storage/storage-provider";
+import { createGenesisVersion, storage } from "@/lib/storage/storage-provider";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
 import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
@@ -158,6 +158,22 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
         masterFileHash = genesisEvent.currentDigest;
       }
 
+      const primaryArtwork: ArtworkProject["primaryArtwork"] = {
+        name: masterFileName,
+        mimeType: masterMimeType,
+        sizeBytes: masterSizeBytes,
+        sha256Hash: masterFileHash,
+        dataUrl: masterDataUrl,
+      };
+
+      const genesisVersion = createGenesisVersion({
+        projectId,
+        createdAt: now,
+        primaryArtwork,
+        genesisEventId: genesisEvent.id,
+        hasFile: Boolean(selectedFile),
+      });
+
       const newProject: ArtworkProject = {
         id: projectId,
         title: parseResult.data.title,
@@ -167,14 +183,9 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
         description: parseResult.data.description,
         createdAt: now,
         updatedAt: now,
-        primaryArtwork: {
-          name: masterFileName,
-          mimeType: masterMimeType,
-          sizeBytes: masterSizeBytes,
-          sha256Hash: masterFileHash,
-          dataUrl: masterDataUrl,
-        },
+        primaryArtwork,
         events: [genesisEvent],
+        versions: [genesisVersion],
         isDemo: false,
       };
 

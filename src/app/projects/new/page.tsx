@@ -21,7 +21,7 @@ import { APP_CONFIG } from "@/config/app-config";
 import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
-import { storage } from "@/lib/storage/storage-provider";
+import { createGenesisVersion, storage } from "@/lib/storage/storage-provider";
 import { ArtworkProject } from "@/types/provenance";
 
 export default function NewProjectPage() {
@@ -97,6 +97,7 @@ export default function NewProjectPage() {
       medium,
       yearCreated: Number(yearCreated),
       description,
+      notes,
     };
 
     const result = projectInputSchema.safeParse(inputData);
@@ -136,9 +137,25 @@ export default function NewProjectPage() {
           description: result.data.description || "Artwork project registered in ArtProof ledger.",
           milestonePhase: "CONCEPT",
           primaryArtworkHash: fileHash,
-          notes: notes.trim() || undefined,
+          notes: result.data.notes || undefined,
         },
         previousDigest: null,
+      });
+
+      const primaryArtwork: ArtworkProject["primaryArtwork"] = {
+        name: sanitizeFilename(selectedFile.name, "master.png"),
+        mimeType: selectedFile.type || "application/octet-stream",
+        sizeBytes: selectedFile.size,
+        sha256Hash: fileHash,
+        dataUrl: filePreview || undefined,
+      };
+
+      const genesisVersion = createGenesisVersion({
+        projectId,
+        createdAt: now,
+        primaryArtwork,
+        genesisEventId: genesisEvent.id,
+        hasFile: true,
       });
 
       const newProject: ArtworkProject = {
@@ -150,14 +167,9 @@ export default function NewProjectPage() {
         description: result.data.description,
         createdAt: now,
         updatedAt: now,
-        primaryArtwork: {
-          name: sanitizeFilename(selectedFile.name, "master.png"),
-          mimeType: selectedFile.type || "application/octet-stream",
-          sizeBytes: selectedFile.size,
-          sha256Hash: fileHash,
-          dataUrl: filePreview || undefined,
-        },
+        primaryArtwork,
         events: [genesisEvent],
+        versions: [genesisVersion],
         isDemo: false,
       };
 
@@ -315,8 +327,11 @@ export default function NewProjectPage() {
                 placeholder="Describe the conceptual background, themes, or intended scope of this body of work..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed"
+                className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
+                  errors.description ? "border-red-500" : "border-[#D6CEBE]"
+                }`}
               />
+              {errors.description && <p className="text-[11px] text-red-600">{errors.description}</p>}
             </div>
           </div>
         </Card>
@@ -437,13 +452,17 @@ export default function NewProjectPage() {
 
           <div className="space-y-1.5">
             <textarea
+              id="notes"
               rows={2}
               disabled={submitting || isSuccess}
               placeholder="e.g. Initial canvas dimensions, underlying color palette intentions, reference sketches used..."
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border border-[#D6CEBE] rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed"
+              className={`w-full px-3.5 py-2 text-sm bg-[#FDFBF7] border rounded-lg focus:outline-none focus:ring-1 focus:ring-[#B86226] disabled:opacity-60 disabled:cursor-not-allowed ${
+                errors.notes ? "border-red-500" : "border-[#D6CEBE]"
+              }`}
             />
+            {errors.notes && <p className="text-[11px] text-red-600">{errors.notes}</p>}
           </div>
         </Card>
 

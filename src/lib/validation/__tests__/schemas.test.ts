@@ -83,6 +83,20 @@ describe("Validation Schemas Suite", () => {
         notes: "a".repeat(2001),
       };
       expect(projectInputSchema.safeParse(excessiveNotes).success).toBe(false);
+
+      const oversizedNotes5000 = {
+        title: "Standalone Creation Study",
+        artistName: "Elena Rostova",
+        medium: "Digital Painting",
+        yearCreated: 2026,
+        description: "Valid description",
+        notes: "n".repeat(5001),
+      };
+      const oversizedResult = projectInputSchema.safeParse(oversizedNotes5000);
+      expect(oversizedResult.success).toBe(false);
+      if (!oversizedResult.success) {
+        expect(oversizedResult.error.issues.some((i) => i.path.includes("notes"))).toBe(true);
+      }
     });
   });
 

@@ -905,20 +905,28 @@ export default function ArtworkDetailPage() {
                     {/* Cryptographic Linkage Info */}
                     <div className="pt-2 border-t border-[#F0EAE1] grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
                       <div className="space-y-0.5">
-                        <span className="text-[#8C827A]">Predecessor Link:</span>
+                        <span className="text-[#8C827A] block">Predecessor Link:</span>
                         {event.previousDigest ? (
                           <HashViewer hash={event.previousDigest} truncate={true} />
                         ) : (
-                          <span className="font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                          <span className="inline-block font-mono text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                             Genesis Node (null)
                           </span>
                         )}
                       </div>
 
                       <div className="space-y-0.5">
-                        <span className="text-[#8C827A]">Current Event Digest:</span>
+                        <span className="text-[#8C827A] block">Current Event Digest:</span>
                         <HashViewer hash={event.currentDigest} truncate={true} />
                       </div>
+
+                      {typeof event.data.primaryArtworkHash === "string" &&
+                        event.data.primaryArtworkHash && (
+                          <div className="sm:col-span-2 space-y-0.5 pt-1">
+                            <span className="text-[#8C827A] block">Recorded Artwork File Digest:</span>
+                            <HashViewer hash={event.data.primaryArtworkHash} truncate={true} />
+                          </div>
+                        )}
                     </div>
                   </Card>
                 </div>
@@ -942,10 +950,10 @@ export default function ArtworkDetailPage() {
                 <h3 id="milestone-modal-title" className="font-serif font-bold text-lg text-[#1C1917]">
                   Record Milestone Event #{project.events.length}
                 </h3>
-                <p className="text-xs text-[#78716C]">
-                  Chain a new verifiable milestone linked to head digest:{" "}
-                  <code className="font-mono text-[11px]">{headDigest.substring(0, 8)}...</code>
-                </p>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-[#78716C] mt-0.5">
+                  <span>Chain a new verifiable milestone linked to head digest:</span>
+                  <HashViewer hash={headDigest} truncate={true} />
+                </div>
               </div>
               <button
                 type="button"

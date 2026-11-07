@@ -16,9 +16,8 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { DisclaimerBanner } from "@/components/ui/DisclaimerBanner";
-import { storage } from "@/lib/storage/storage-provider";
+import { importStudioBackup, storage } from "@/lib/storage/storage-provider";
 import { generateDemoProject } from "@/lib/storage/demo-data";
-import { ArtworkProject } from "@/types/provenance";
 import { APP_CONFIG } from "@/config/app-config";
 import { StudioShell } from "@/components/layout/StudioShell";
 
@@ -103,29 +102,21 @@ export default function SettingsPage() {
     if (file.size > 10 * 1024 * 1024) {
       setErrorMessage("Backup file size exceeds the 10MB safety limit.");
       setActionPending(false);
+      e.target.value = "";
       return;
     }
 
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
+      const result = await importStudioBackup(text, storage);
 
-      if (!parsed.projects || !Array.isArray(parsed.projects)) {
-        setErrorMessage("Invalid backup file: 'projects' array not found.");
-        setActionPending(false);
+      if (!result.success) {
+        setErrorMessage(result.error || "Invalid backup file.");
         return;
       }
 
-      let importedCount = 0;
-      for (const proj of parsed.projects as ArtworkProject[]) {
-        if (proj && typeof proj === "object" && proj.id && proj.title) {
-          await storage.saveProject(proj);
-          importedCount++;
-        }
-      }
-
       await refreshStats();
-      setStatusMessage(`Successfully imported ${importedCount} project(s) into studio storage.`);
+      setStatusMessage(`Successfully imported ${result.importedCount} project(s) into studio storage.`);
     } catch (err) {
       setErrorMessage(`Failed to import backup: ${String(err)}`);
     } finally {

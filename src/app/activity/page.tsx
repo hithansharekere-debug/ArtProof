@@ -112,6 +112,7 @@ export default function ActivityPage() {
                 <option value="MILESTONE_LOGGED">Milestone Logged</option>
                 <option value="EVIDENCE_ATTACHED">Evidence Attached</option>
                 <option value="ARTWORK_REVISED">Artwork Revised</option>
+                <option value="VERSION_RECORDED">Artwork Version</option>
               </select>
             </div>
           )}
@@ -169,7 +170,7 @@ export default function ActivityPage() {
                         variant={
                           isGenesis
                             ? "ink"
-                            : event.eventType === "ARTWORK_REVISED"
+                            : event.eventType === "VERSION_RECORDED" || event.eventType === "ARTWORK_REVISED"
                             ? "copper"
                             : event.eventType === "EVIDENCE_ATTACHED"
                             ? "sage"

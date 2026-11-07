@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { storage, sanitizeProject } from "../storage-provider";
+import {
+  storage,
+  sanitizeProject,
+  createGenesisVersion,
+  streamlineProjectForLocalStorage,
+  importStudioBackup,
+} from "../storage-provider";
 import { generateDemoProject } from "../demo-data";
 import {
   verifyProvenanceManifest,
@@ -328,5 +334,287 @@ describe("Storage Provider & Demo Data Suite", () => {
     // Version file path sanitized and HTTPS URL blocked
     expect(sanitized?.versions?.[0].file?.name).toBe("C-Windows-System32-cmd.exe");
     expect(sanitized?.versions?.[0].file?.dataUrl).toBeUndefined();
+  });
+
+  it("initializes v1.0 Genesis version linked to genesis event without duplicating versions", async () => {
+    const projectId = "proj_genesis_consistency";
+    const now = "2026-10-15T12:00:00.000Z";
+    const genesisEvent = await createTimelineEvent({
+      id: "evt_genesis_0",
+      projectId,
+      sequence: 0,
+      eventType: "PROJECT_CREATED",
+      timestamp: now,
+      data: {
+        title: "Consistency Study",
+        milestonePhase: "CONCEPT",
+        primaryArtworkHash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      },
+      previousDigest: null,
+    });
+
+    const primaryArtwork: ArtworkProject["primaryArtwork"] = {
+      name: "consistency-master.png",
+      mimeType: "image/png",
+      sizeBytes: 4096,
+      sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    };
+
+    const genesisVersion = createGenesisVersion({
+      projectId,
+      createdAt: now,
+      primaryArtwork,
+      genesisEventId: genesisEvent.id,
+      hasFile: true,
+    });
+
+    expect(genesisVersion.id).toBe(`ver_init_${projectId}`);
+    expect(genesisVersion.versionLabel).toBe("v1.0 Genesis");
+    expect(genesisVersion.associatedEventId).toBe("evt_genesis_0");
+    expect(genesisVersion.hasFile).toBe(true);
+
+    // Explicitly passing duplicate genesis versions should be deduplicated by sanitizeProject
+    const projectWithExplicitGenesis: ArtworkProject = {
+      id: projectId,
+      title: "Consistency Study",
+      artistName: "Elena Rostova",
+      medium: "Digital Painting",
+      yearCreated: 2026,
+      description: "Testing explicit genesis version",
+      createdAt: now,
+      updatedAt: now,
+      primaryArtwork,
+      events: [genesisEvent],
+      versions: [genesisVersion, { ...genesisVersion }],
+      isDemo: false,
+    };
+
+    await storage.saveProject(projectWithExplicitGenesis);
+    const retrieved = await storage.getProject(projectId);
+    expect(retrieved?.versions?.length).toBe(1);
+    expect(retrieved?.versions?.[0].id).toBe(`ver_init_${projectId}`);
+    expect(retrieved?.versions?.[0].associatedEventId).toBe("evt_genesis_0");
+  });
+
+  it("strips large top-level and nested version dataUrls for localStorage without mutating original project", () => {
+    const smallDataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const largeDataUrl = `data:image/png;base64,${"A".repeat(60000)}`;
+
+    const originalProject: ArtworkProject = {
+      id: "proj_dataurl_test",
+      title: "Data URL Sanitization Study",
+      artistName: "Marcus Vance",
+      medium: "Oil on Panel",
+      yearCreated: 2026,
+      description: "Testing both version dataUrl locations",
+      createdAt: "2026-10-15T10:00:00.000Z",
+      updatedAt: "2026-10-15T10:00:00.000Z",
+      primaryArtwork: {
+        name: "master.png",
+        mimeType: "image/png",
+        sizeBytes: 65000,
+        sha256Hash: "1111111111111111111111111111111111111111111111111111111111111111",
+        dataUrl: largeDataUrl,
+      },
+      events: [],
+      versions: [
+        {
+          id: "ver_large",
+          projectId: "proj_dataurl_test",
+          versionNumber: 1,
+          versionLabel: "v1.0 Heavy Master",
+          createdAt: "2026-10-15T10:00:00.000Z",
+          notes: "Large preview in both fields",
+          hasFile: true,
+          sha256Hash: "1111111111111111111111111111111111111111111111111111111111111111",
+          fileName: "master.png",
+          fileSizeBytes: 65000,
+          isArchivalFinal: true,
+          dataUrl: largeDataUrl,
+          file: {
+            name: "master.png",
+            mimeType: "image/png",
+            sizeBytes: 65000,
+            sha256Hash: "1111111111111111111111111111111111111111111111111111111111111111",
+            algorithm: "SHA-256",
+            dataUrl: largeDataUrl,
+          },
+        },
+        {
+          id: "ver_small",
+          projectId: "proj_dataurl_test",
+          versionNumber: 2,
+          versionLabel: "v1.1 Small Thumbnail",
+          createdAt: "2026-10-15T11:00:00.000Z",
+          notes: "Compact preview in both fields",
+          hasFile: true,
+          dataUrl: smallDataUrl,
+          file: {
+            name: "thumb.png",
+            mimeType: "image/png",
+            sizeBytes: 120,
+            sha256Hash: "2222222222222222222222222222222222222222222222222222222222222222",
+            algorithm: "SHA-256",
+            dataUrl: smallDataUrl,
+          },
+        },
+      ],
+    };
+
+    const streamlined = streamlineProjectForLocalStorage(originalProject);
+
+    // Large dataUrls stripped from both top-level ver.dataUrl and nested ver.file.dataUrl
+    expect(streamlined.primaryArtwork.dataUrl).toBeUndefined();
+    expect(streamlined.versions?.[0].dataUrl).toBeUndefined();
+    expect(streamlined.versions?.[0].file?.dataUrl).toBeUndefined();
+
+    // All other metadata on ver_large preserved intact
+    expect(streamlined.versions?.[0].versionLabel).toBe("v1.0 Heavy Master");
+    expect(streamlined.versions?.[0].notes).toBe("Large preview in both fields");
+    expect(streamlined.versions?.[0].sha256Hash).toBe(
+      "1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    expect(streamlined.versions?.[0].isArchivalFinal).toBe(true);
+    expect(streamlined.versions?.[0].file?.name).toBe("master.png");
+
+    // Small dataUrls preserved intact
+    expect(streamlined.versions?.[1].dataUrl).toBe(smallDataUrl);
+    expect(streamlined.versions?.[1].file?.dataUrl).toBe(smallDataUrl);
+
+    // Original project was not mutated
+    expect(originalProject.primaryArtwork.dataUrl).toBe(largeDataUrl);
+    expect(originalProject.versions?.[0].dataUrl).toBe(largeDataUrl);
+    expect(originalProject.versions?.[0].file?.dataUrl).toBe(largeDataUrl);
+  });
+
+  describe("Studio Backup Import Validation", () => {
+    it("imports a valid studio backup cleanly", async () => {
+      const demo = await generateDemoProject();
+      const backupPayload = JSON.stringify({
+        app: "ArtProof",
+        version: "1.0.0",
+        exportedAt: new Date().toISOString(),
+        projects: [demo],
+      });
+
+      const result = await importStudioBackup(backupPayload, storage);
+      expect(result.success).toBe(true);
+      expect(result.importedCount).toBe(1);
+
+      const stored = await storage.getProject(demo.id);
+      expect(stored).not.toBeNull();
+      expect(stored?.title).toBe(demo.title);
+    });
+
+    it("rejects malformed backup payloads with clear error feedback", async () => {
+      const badJson = await importStudioBackup("{not valid json", storage);
+      expect(badJson.success).toBe(false);
+      expect(badJson.error).toContain("failed to parse JSON");
+
+      const missingProjects = await importStudioBackup({ app: "ArtProof" }, storage);
+      expect(missingProjects.success).toBe(false);
+      expect(missingProjects.error).toContain("'projects' array not found");
+
+      const badHashRecord = await importStudioBackup(
+        {
+          app: "ArtProof",
+          projects: [
+            {
+              id: "proj_bad_hash",
+              title: "Corrupt Digest",
+              artistName: "Artist",
+              medium: "Oil",
+              yearCreated: 2026,
+              description: "Invalid primary hash",
+              createdAt: "2026-10-01T00:00:00.000Z",
+              updatedAt: "2026-10-01T00:00:00.000Z",
+              primaryArtwork: {
+                name: "bad.png",
+                mimeType: "image/png",
+                sizeBytes: 100,
+                sha256Hash: "not-a-64-char-hex-hash",
+              },
+              events: [],
+            },
+          ],
+        },
+        storage
+      );
+      expect(badHashRecord.success).toBe(false);
+      expect(badHashRecord.error).toContain("Record #1");
+    });
+
+    it("avoids partially importing a backup if a later record is invalid", async () => {
+      const demo = await generateDemoProject();
+      const invalidSecondProject = {
+        id: "proj_second_invalid",
+        title: "   ", // Invalid empty title
+        artistName: "Artist",
+        medium: "Oil",
+        yearCreated: 2026,
+        primaryArtwork: demo.primaryArtwork,
+        events: [],
+      };
+
+      const result = await importStudioBackup(
+        {
+          app: "ArtProof",
+          projects: [demo, invalidSecondProject],
+        },
+        storage
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.importedCount).toBe(0);
+      expect(result.error).toContain("Record #2");
+
+      // First valid record must NOT have been partially imported
+      const all = await storage.getProjects();
+      expect(all.length).toBe(0);
+    });
+
+    it("does not overwrite an unrelated existing user-created project on ID collision", async () => {
+      const existingUserProject: ArtworkProject = {
+        id: "proj_collision_guard",
+        title: "Original User Masterpiece",
+        artistName: "Real User",
+        medium: "Watercolor",
+        yearCreated: 2026,
+        description: "Must remain untouched",
+        createdAt: "2026-09-01T10:00:00.000Z",
+        updatedAt: "2026-09-01T10:00:00.000Z",
+        primaryArtwork: {
+          name: "user.png",
+          mimeType: "image/png",
+          sizeBytes: 1024,
+          sha256Hash: "1111111111111111111111111111111111111111111111111111111111111111",
+        },
+        events: [],
+        isDemo: false,
+      };
+
+      await storage.saveProject(existingUserProject);
+
+      const collidingBackupProject = {
+        ...existingUserProject,
+        title: "Unrelated Conflicting Project",
+        createdAt: "2026-10-20T10:00:00.000Z",
+      };
+
+      const result = await importStudioBackup(
+        {
+          app: "ArtProof",
+          projects: [collidingBackupProject],
+        },
+        storage
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("conflicts with an existing unrelated project");
+
+      const preserved = await storage.getProject("proj_collision_guard");
+      expect(preserved?.title).toBe("Original User Masterpiece");
+    });
   });
 });
