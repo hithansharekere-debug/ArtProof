@@ -18,7 +18,13 @@ import { Badge } from "@/components/ui/Badge";
 import { HashViewer } from "@/components/ui/HashViewer";
 import { DisclaimerBanner } from "@/components/ui/DisclaimerBanner";
 import { APP_CONFIG } from "@/config/app-config";
-import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
+import {
+  projectInputSchema,
+  validateArtworkFile,
+  sanitizeFilename,
+  resolveArtworkMimeType,
+  readArtworkDataUrl,
+} from "@/lib/validation/schemas";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
 import { createGenesisVersion, storage } from "@/lib/storage/storage-provider";
@@ -46,10 +52,7 @@ export default function NewProjectPage() {
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [isSuccess, setIsSuccess] = useState<boolean>(false);
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processSelectedFile = async (file: File) => {
     // Validate file properties
     const fileValidation = validateArtworkFile(file);
     if (!fileValidation.valid) {
@@ -67,25 +70,32 @@ export default function NewProjectPage() {
     setHashingFile(true);
 
     try {
-      // Calculate SHA-256 digest from actual raw bytes
-      const hash = await computeSha256FromFile(file);
+      // Calculate SHA-256 digest from actual raw bytes and generate preview if image
+      const [hash, preview] = await Promise.all([
+        computeSha256FromFile(file),
+        readArtworkDataUrl(file),
+      ]);
       setFileHash(hash);
-
-      // Create preview if it is an image
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          setFilePreview(reader.result as string);
-        };
-        reader.readAsDataURL(file);
-      } else {
-        setFilePreview("");
-      }
+      setFilePreview(preview);
     } catch (err) {
       setErrors((prev) => ({ ...prev, file: `Failed to calculate hash: ${String(err)}` }));
     } finally {
       setHashingFile(false);
     }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processSelectedFile(file);
+  };
+
+  const handleFileDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    await processSelectedFile(file);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -142,9 +152,12 @@ export default function NewProjectPage() {
         previousDigest: null,
       });
 
+      const resolvedMime =
+        resolveArtworkMimeType(selectedFile) || selectedFile.type || "application/octet-stream";
+
       const primaryArtwork: ArtworkProject["primaryArtwork"] = {
         name: sanitizeFilename(selectedFile.name, "master.png"),
-        mimeType: selectedFile.type || "application/octet-stream",
+        mimeType: resolvedMime,
         sizeBytes: selectedFile.size,
         sha256Hash: fileHash,
         dataUrl: filePreview || undefined,
@@ -356,6 +369,11 @@ export default function NewProjectPage() {
 
           <div className="space-y-4">
             <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={handleFileDrop}
               className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
                 selectedFile ? "border-[#B86226]/50 bg-[#FDFBF7]" : "border-[#D6CEBE] hover:border-[#B86226]/40 bg-[#FAF7F0]/40"
               }`}
@@ -363,7 +381,10 @@ export default function NewProjectPage() {
               <input
                 id="artworkFileInput"
                 type="file"
-                accept={APP_CONFIG.limits.allowedExtensions.join(",")}
+                accept={[
+                  ...APP_CONFIG.limits.allowedMimeTypes,
+                  ...APP_CONFIG.limits.allowedExtensions,
+                ].join(",")}
                 onChange={handleFileChange}
                 className="hidden"
               />

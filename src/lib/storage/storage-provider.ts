@@ -240,15 +240,72 @@ export function sanitizeProject(record: unknown): ArtworkProject | null {
   };
 }
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    if (typeof window === "undefined" || !window.indexedDB) {
-      reject(new Error("IndexedDB is not available in this environment."));
-      return;
-    }
+const IDB_TIMEOUT_MS = 1500;
 
+let cachedDb: IDBDatabase | null = null;
+let cachedIdbFactory: IDBFactory | null = null;
+let pendingOpenPromise: Promise<IDBDatabase> | null = null;
+
+function resetCachedDb(): void {
+  if (cachedDb) {
     try {
-      const request = window.indexedDB.open(DB_NAME, DB_VERSION);
+      cachedDb.close();
+    } catch {
+      // Ignore close errors
+    }
+  }
+  cachedDb = null;
+  cachedIdbFactory = null;
+  pendingOpenPromise = null;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs = IDB_TIMEOUT_MS): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error("IndexedDB operation timed out."));
+      }
+    }, timeoutMs);
+
+    promise.then(
+      (val) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(val);
+        }
+      },
+      (err) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      }
+    );
+  });
+}
+
+function openDB(): Promise<IDBDatabase> {
+  if (typeof window === "undefined" || !window.indexedDB) {
+    return Promise.reject(new Error("IndexedDB is not available in this environment."));
+  }
+  if (cachedIdbFactory && cachedIdbFactory !== window.indexedDB) {
+    resetCachedDb();
+  }
+  if (cachedDb) {
+    return Promise.resolve(cachedDb);
+  }
+  if (pendingOpenPromise) {
+    return pendingOpenPromise;
+  }
+
+  const currentFactory = window.indexedDB;
+  const openPromise = new Promise<IDBDatabase>((resolve, reject) => {
+    try {
+      const request = currentFactory.open(DB_NAME, DB_VERSION);
 
       request.onupgradeneeded = () => {
         const db = request.result;
@@ -257,13 +314,39 @@ function openDB(): Promise<IDBDatabase> {
         }
       };
 
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-      request.onblocked = () => reject(new Error("IndexedDB database open was blocked."));
+      request.onsuccess = () => {
+        const db = request.result;
+        cachedDb = db;
+        cachedIdbFactory = currentFactory;
+        db.onversionchange = () => {
+          resetCachedDb();
+        };
+        db.onclose = () => {
+          cachedDb = null;
+          pendingOpenPromise = null;
+        };
+        resolve(db);
+      };
+      request.onerror = () => {
+        pendingOpenPromise = null;
+        reject(request.error || new Error("IndexedDB open failed."));
+      };
+      request.onblocked = () => {
+        pendingOpenPromise = null;
+        reject(new Error("IndexedDB database open was blocked."));
+      };
     } catch (err) {
+      pendingOpenPromise = null;
       reject(err);
     }
   });
+
+  pendingOpenPromise = withTimeout(openPromise).catch((err) => {
+    pendingOpenPromise = null;
+    throw err;
+  });
+
+  return pendingOpenPromise;
 }
 
 function readFromLocalStorage(): ArtworkProject[] {
@@ -353,24 +436,28 @@ export class IndexedDBStorage implements IProvenanceStorage {
     if (typeof window !== "undefined" && window.indexedDB) {
       try {
         const db = await openDB();
-        const dbProjects = await new Promise<ArtworkProject[]>((resolve, reject) => {
-          const tx = db.transaction(STORE_PROJECTS, "readonly");
-          const store = tx.objectStore(STORE_PROJECTS);
-          const request = store.getAll();
+        const dbProjects = await withTimeout(
+          new Promise<ArtworkProject[]>((resolve, reject) => {
+            const tx = db.transaction(STORE_PROJECTS, "readonly");
+            const store = tx.objectStore(STORE_PROJECTS);
+            const request = store.getAll();
 
-          request.onsuccess = () => {
-            const raw = request.result;
-            if (!Array.isArray(raw)) {
-              resolve([]);
-              return;
-            }
-            const valid = raw
-              .map(sanitizeProject)
-              .filter((p): p is ArtworkProject => p !== null);
-            resolve(valid);
-          };
-          request.onerror = () => reject(request.error);
-        });
+            request.onsuccess = () => {
+              const raw = request.result;
+              if (!Array.isArray(raw)) {
+                resolve([]);
+                return;
+              }
+              const valid = raw
+                .map(sanitizeProject)
+                .filter((p): p is ArtworkProject => p !== null);
+              resolve(valid);
+            };
+            request.onerror = () => reject(request.error || new Error("IndexedDB getAll failed."));
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed."));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted."));
+          })
+        );
 
         if (dbProjects.length > 0) {
           for (const p of dbProjects) {
@@ -382,6 +469,7 @@ export class IndexedDBStorage implements IProvenanceStorage {
           return dbProjects;
         }
       } catch (err) {
+        resetCachedDb();
         console.warn("[ArtProof Storage] IndexedDB read failed, trying backup:", err);
       }
     }
@@ -416,23 +504,28 @@ export class IndexedDBStorage implements IProvenanceStorage {
     if (typeof window !== "undefined" && window.indexedDB) {
       try {
         const db = await openDB();
-        const project = await new Promise<ArtworkProject | null>((resolve, reject) => {
-          const tx = db.transaction(STORE_PROJECTS, "readonly");
-          const store = tx.objectStore(STORE_PROJECTS);
-          const request = store.get(id);
+        const project = await withTimeout(
+          new Promise<ArtworkProject | null>((resolve, reject) => {
+            const tx = db.transaction(STORE_PROJECTS, "readonly");
+            const store = tx.objectStore(STORE_PROJECTS);
+            const request = store.get(id);
 
-          request.onsuccess = () => {
-            const sanitized = sanitizeProject(request.result);
-            resolve(sanitized);
-          };
-          request.onerror = () => reject(request.error);
-        });
+            request.onsuccess = () => {
+              const sanitized = sanitizeProject(request.result);
+              resolve(sanitized);
+            };
+            request.onerror = () => reject(request.error || new Error("IndexedDB get failed."));
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed."));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted."));
+          })
+        );
 
         if (project) {
           memoryCache.set(id, project);
           return project;
         }
       } catch (err) {
+        resetCachedDb();
         console.warn(`[ArtProof Storage] IndexedDB lookup failed for ${id}:`, err);
       }
     }
@@ -477,15 +570,20 @@ export class IndexedDBStorage implements IProvenanceStorage {
     if (typeof window !== "undefined" && window.indexedDB) {
       try {
         const db = await openDB();
-        await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction(STORE_PROJECTS, "readwrite");
-          const store = tx.objectStore(STORE_PROJECTS);
-          const request = store.put(sanitized);
+        await withTimeout(
+          new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_PROJECTS, "readwrite");
+            const store = tx.objectStore(STORE_PROJECTS);
+            const request = store.put(sanitized);
 
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error || new Error("IndexedDB put failed."));
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed."));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted."));
+          })
+        );
       } catch (err) {
+        resetCachedDb();
         console.warn("[ArtProof Storage] IndexedDB write failed, persisted to memory/localStorage:", err);
       }
     }
@@ -500,15 +598,20 @@ export class IndexedDBStorage implements IProvenanceStorage {
     if (typeof window !== "undefined" && window.indexedDB) {
       try {
         const db = await openDB();
-        await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction(STORE_PROJECTS, "readwrite");
-          const store = tx.objectStore(STORE_PROJECTS);
-          const request = store.delete(id);
+        await withTimeout(
+          new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_PROJECTS, "readwrite");
+            const store = tx.objectStore(STORE_PROJECTS);
+            const request = store.delete(id);
 
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error || new Error("IndexedDB delete failed."));
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed."));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted."));
+          })
+        );
       } catch (err) {
+        resetCachedDb();
         console.warn(`[ArtProof Storage] IndexedDB delete failed for ${id}:`, err);
       }
     }
@@ -527,15 +630,20 @@ export class IndexedDBStorage implements IProvenanceStorage {
     if (typeof window !== "undefined" && window.indexedDB) {
       try {
         const db = await openDB();
-        await new Promise<void>((resolve, reject) => {
-          const tx = db.transaction(STORE_PROJECTS, "readwrite");
-          const store = tx.objectStore(STORE_PROJECTS);
-          const request = store.clear();
+        await withTimeout(
+          new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_PROJECTS, "readwrite");
+            const store = tx.objectStore(STORE_PROJECTS);
+            const request = store.clear();
 
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error || new Error("IndexedDB clear failed."));
+            tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed."));
+            tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted."));
+          })
+        );
       } catch (err) {
+        resetCachedDb();
         console.warn("[ArtProof Storage] IndexedDB clear failed:", err);
       }
     }

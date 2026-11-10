@@ -3,6 +3,8 @@ import {
   projectInputSchema,
   milestoneInputSchema,
   validateArtworkFile,
+  resolveArtworkMimeType,
+  readArtworkDataUrl,
   manifestImportSchema,
   sanitizeFilename,
   isSafeDataUrl,
@@ -300,6 +302,118 @@ describe("Validation Schemas Suite", () => {
       expect(isSafeDataUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")).toBe(false);
       expect(isSafeDataUrl("data:application/javascript;base64,YWxlcnQoMSk=")).toBe(false);
       expect(sanitizeDataUrl("data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")).toBeUndefined();
+    });
+  });
+
+  describe("PNG & JPEG Upload Regression Suite", () => {
+    it("accepts standard and browser-alias PNG files and generates valid data URLs", async () => {
+      const standardPng = new File(["\x89PNG\r\n\x1a\n"], "masterpiece.png", {
+        type: "image/png",
+      });
+      expect(validateArtworkFile(standardPng).valid).toBe(true);
+      expect(resolveArtworkMimeType(standardPng)).toBe("image/png");
+
+      const xPng = new File(["\x89PNG\r\n\x1a\n"], "legacy-browser.png", {
+        type: "image/x-png",
+      });
+      expect(validateArtworkFile(xPng).valid).toBe(true);
+      expect(resolveArtworkMimeType(xPng)).toBe("image/png");
+
+      const emptyMimePng = new File(["\x89PNG\r\n\x1a\n"], "windows-upload.PNG", {
+        type: "",
+      });
+      expect(validateArtworkFile(emptyMimePng).valid).toBe(true);
+      expect(resolveArtworkMimeType(emptyMimePng)).toBe("image/png");
+
+      const octetPng = new File(["\x89PNG\r\n\x1a\n"], "dragged-canvas.png", {
+        type: "application/octet-stream",
+      });
+      expect(validateArtworkFile(octetPng).valid).toBe(true);
+      expect(resolveArtworkMimeType(octetPng)).toBe("image/png");
+
+      const pngDataUrl = await readArtworkDataUrl(emptyMimePng);
+      expect(pngDataUrl.startsWith("data:image/png;base64,")).toBe(true);
+      expect(isSafeDataUrl(pngDataUrl)).toBe(true);
+      expect(sanitizeDataUrl(pngDataUrl)).toBe(pngDataUrl);
+    });
+
+    it("accepts standard and browser-alias JPEG (.jpg, .jpeg, .jfif) files and generates valid data URLs", async () => {
+      const standardJpg = new File(["\xff\xd8\xff\xe0"], "portrait.jpg", {
+        type: "image/jpeg",
+      });
+      expect(validateArtworkFile(standardJpg).valid).toBe(true);
+      expect(resolveArtworkMimeType(standardJpg)).toBe("image/jpeg");
+
+      const standardJpeg = new File(["\xff\xd8\xff\xe0"], "landscape.jpeg", {
+        type: "image/jpeg",
+      });
+      expect(validateArtworkFile(standardJpeg).valid).toBe(true);
+      expect(resolveArtworkMimeType(standardJpeg)).toBe("image/jpeg");
+
+      const nonStandardJpgMime = new File(["\xff\xd8\xff\xe0"], "camera.jpg", {
+        type: "image/jpg",
+      });
+      expect(validateArtworkFile(nonStandardJpgMime).valid).toBe(true);
+      expect(resolveArtworkMimeType(nonStandardJpgMime)).toBe("image/jpeg");
+
+      const progressiveJpegMime = new File(["\xff\xd8\xff\xe0"], "progressive.jpeg", {
+        type: "image/pjpeg",
+      });
+      expect(validateArtworkFile(progressiveJpegMime).valid).toBe(true);
+      expect(resolveArtworkMimeType(progressiveJpegMime)).toBe("image/jpeg");
+
+      const emptyMimeJpg = new File(["\xff\xd8\xff\xe0"], "SCAN_001.JPG", {
+        type: "",
+      });
+      expect(validateArtworkFile(emptyMimeJpg).valid).toBe(true);
+      expect(resolveArtworkMimeType(emptyMimeJpg)).toBe("image/jpeg");
+
+      const emptyMimeJpeg = new File(["\xff\xd8\xff\xe0"], "SCAN_002.JPEG", {
+        type: "application/octet-stream",
+      });
+      expect(validateArtworkFile(emptyMimeJpeg).valid).toBe(true);
+      expect(resolveArtworkMimeType(emptyMimeJpeg)).toBe("image/jpeg");
+
+      const jpegDataUrl = await readArtworkDataUrl(emptyMimeJpg);
+      expect(jpegDataUrl.startsWith("data:image/jpeg;base64,")).toBe(true);
+      expect(isSafeDataUrl(jpegDataUrl)).toBe(true);
+      expect(sanitizeDataUrl(jpegDataUrl)).toBe(jpegDataUrl);
+    });
+
+    it("still rejects invalid file types, spoofed executables, and oversized PNG/JPEG files", () => {
+      const spoofedExeAsPng = new File(["MZ\x90\x00"], "malware.exe", {
+        type: "image/png",
+      });
+      expect(validateArtworkFile(spoofedExeAsPng).valid).toBe(false);
+      expect(resolveArtworkMimeType(spoofedExeAsPng)).toBeNull();
+
+      const textFile = new File(["hello world"], "notes.txt", {
+        type: "text/plain",
+      });
+      expect(validateArtworkFile(textFile).valid).toBe(false);
+
+      const unknownEmptyMime = new File(["binary"], "archive.zip", {
+        type: "",
+      });
+      expect(validateArtworkFile(unknownEmptyMime).valid).toBe(false);
+
+      const oversizedPng = {
+        name: "huge.png",
+        size: 21 * 1024 * 1024,
+        type: "image/png",
+      } as unknown as File;
+      const oversizedPngCheck = validateArtworkFile(oversizedPng);
+      expect(oversizedPngCheck.valid).toBe(false);
+      expect(oversizedPngCheck.error).toContain("exceeds maximum allowed limit");
+
+      const oversizedJpeg = {
+        name: "huge.jpeg",
+        size: 21 * 1024 * 1024,
+        type: "image/jpeg",
+      } as unknown as File;
+      const oversizedJpegCheck = validateArtworkFile(oversizedJpeg);
+      expect(oversizedJpegCheck.valid).toBe(false);
+      expect(oversizedJpegCheck.error).toContain("exceeds maximum allowed limit");
     });
   });
 });

@@ -617,4 +617,118 @@ describe("Storage Provider & Demo Data Suite", () => {
       expect(preserved?.title).toBe("Original User Masterpiece");
     });
   });
+
+  describe("Navigation & Stalled IndexedDB Fallback Regression Suite", () => {
+    it("falls back to localStorage without hanging when IndexedDB open is blocked or stalled during page navigation", async () => {
+      const demo = await generateDemoProject();
+      await storage.saveProject(demo);
+
+      const originalWindow = globalThis.window;
+      // Simulate browser window with a blocked/stalled IndexedDB open request
+      const mockBlockedIdb = {
+        open: () => {
+          const req: Record<string, unknown> = {};
+          setTimeout(() => {
+            if (typeof req.onblocked === "function") {
+              (req.onblocked as () => void)();
+            }
+          }, 5);
+          return req;
+        },
+      };
+
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          ...(originalWindow || {}),
+          indexedDB: mockBlockedIdb,
+          localStorage: globalThis.localStorage,
+        },
+        configurable: true,
+        writable: true,
+      });
+
+      try {
+        // Sequential navigation queries across Dashboard -> Artworks -> Activity -> Detail
+        const dashboardList = await storage.getProjects();
+        expect(dashboardList.length).toBe(1);
+        expect(dashboardList[0].id).toBe(demo.id);
+
+        const activityList = await storage.getProjects();
+        expect(activityList.length).toBe(1);
+
+        const detailProject = await storage.getProject(demo.id);
+        expect(detailProject).not.toBeNull();
+        expect(detailProject?.id).toBe(demo.id);
+      } finally {
+        Object.defineProperty(globalThis, "window", {
+          value: originalWindow,
+          configurable: true,
+          writable: true,
+        });
+      }
+    });
+
+    it("falls back cleanly when an IndexedDB transaction aborts mid-navigation", async () => {
+      const demo = await generateDemoProject();
+      await storage.saveProject(demo);
+
+      const originalWindow = globalThis.window;
+      const mockAbortingIdb = {
+        open: () => {
+          const req: Record<string, unknown> = {
+            result: {
+              objectStoreNames: { contains: () => true },
+              transaction: () => {
+                const tx: Record<string, unknown> = {
+                  error: new Error("Simulated IDB transaction abort"),
+                  objectStore: () => ({
+                    getAll: () => ({}),
+                    get: () => ({}),
+                  }),
+                };
+                setTimeout(() => {
+                  if (typeof tx.onabort === "function") {
+                    (tx.onabort as () => void)();
+                  }
+                }, 5);
+                return tx;
+              },
+              close: () => {},
+            },
+          };
+          setTimeout(() => {
+            if (typeof req.onsuccess === "function") {
+              (req.onsuccess as () => void)();
+            }
+          }, 2);
+          return req;
+        },
+      };
+
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          ...(originalWindow || {}),
+          indexedDB: mockAbortingIdb,
+          localStorage: globalThis.localStorage,
+        },
+        configurable: true,
+        writable: true,
+      });
+
+      try {
+        const projects = await storage.getProjects();
+        expect(projects.length).toBe(1);
+        expect(projects[0].id).toBe(demo.id);
+
+        const single = await storage.getProject(demo.id);
+        expect(single?.id).toBe(demo.id);
+      } finally {
+        Object.defineProperty(globalThis, "window", {
+          value: originalWindow,
+          configurable: true,
+          writable: true,
+        });
+      }
+    });
+  });
 });

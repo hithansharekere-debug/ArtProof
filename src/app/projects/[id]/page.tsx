@@ -33,7 +33,13 @@ import {
   verifyProvenanceManifest,
 } from "@/lib/crypto/manifest";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
-import { validateArtworkFile, manifestImportSchema, sanitizeFilename } from "@/lib/validation/schemas";
+import {
+  validateArtworkFile,
+  manifestImportSchema,
+  sanitizeFilename,
+  resolveArtworkMimeType,
+  readArtworkDataUrl,
+} from "@/lib/validation/schemas";
 import { APP_CONFIG } from "@/config/app-config";
 import {
   ArtworkProject,
@@ -117,23 +123,27 @@ export default function ArtworkDetailPage() {
 
   useEffect(() => {
     let active = true;
-    storage.getProject(projectId).then(async (p) => {
-      if (!active) return;
-      if (!p) {
-        setProject(null);
-        setLoading(false);
-        return;
-      }
-      setProject(p);
-      const manifest = buildProvenanceManifest(p);
-      const report = await verifyProvenanceManifest(manifest);
-      if (active) {
-        setVerificationReport(report);
-        setLoading(false);
-      }
-    }).catch(() => {
-      if (active) setLoading(false);
-    });
+    storage
+      .getProject(projectId)
+      .then(async (p) => {
+        if (!active) return;
+        if (!p) {
+          setProject(null);
+          return;
+        }
+        setProject(p);
+        const manifest = buildProvenanceManifest(p);
+        const report = await verifyProvenanceManifest(manifest);
+        if (active) {
+          setVerificationReport(report);
+        }
+      })
+      .catch(() => {
+        // Handled in finally
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };
@@ -155,16 +165,12 @@ export default function ArtworkDetailPage() {
     setEvidenceHashing(true);
 
     try {
-      const hash = await computeSha256FromFile(file);
+      const [hash, preview] = await Promise.all([
+        computeSha256FromFile(file),
+        readArtworkDataUrl(file),
+      ]);
       setEvidenceHash(hash);
-
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => setEvidencePreview(reader.result as string);
-        reader.readAsDataURL(file);
-      } else {
-        setEvidencePreview("");
-      }
+      setEvidencePreview(preview);
     } catch (err) {
       setEvidenceError(`Failed to compute hash: ${String(err)}`);
     } finally {
@@ -187,16 +193,12 @@ export default function ArtworkDetailPage() {
     setRevisedArtworkHashing(true);
 
     try {
-      const hash = await computeSha256FromFile(file);
+      const [hash, preview] = await Promise.all([
+        computeSha256FromFile(file),
+        readArtworkDataUrl(file),
+      ]);
       setRevisedArtworkHash(hash);
-
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => setRevisedArtworkPreview(reader.result as string);
-        reader.readAsDataURL(file);
-      } else {
-        setRevisedArtworkPreview("");
-      }
+      setRevisedArtworkPreview(preview);
     } catch (err) {
       setModalError(`Failed to compute revised artwork hash: ${String(err)}`);
     } finally {
@@ -234,7 +236,7 @@ export default function ArtworkDetailPage() {
         attachedEvidenceList.push({
           id: `evi_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
           name: evidenceFile.name,
-          mimeType: evidenceFile.type || "application/octet-stream",
+          mimeType: resolveArtworkMimeType(evidenceFile) || evidenceFile.type || "application/octet-stream",
           sizeBytes: evidenceFile.size,
           sha256Hash: evidenceHash,
           caption: evidenceCaption.trim() || undefined,
@@ -274,7 +276,7 @@ export default function ArtworkDetailPage() {
         primaryArtwork: isRevision && revisedArtworkFile
           ? {
               name: revisedArtworkFile.name,
-              mimeType: revisedArtworkFile.type,
+              mimeType: resolveArtworkMimeType(revisedArtworkFile) || revisedArtworkFile.type || "application/octet-stream",
               sizeBytes: revisedArtworkFile.size,
               sha256Hash: revisedArtworkHash,
               dataUrl: revisedArtworkPreview || project.primaryArtwork.dataUrl,
@@ -322,16 +324,12 @@ export default function ArtworkDetailPage() {
     setVersionFileHashing(true);
 
     try {
-      const hash = await computeSha256FromFile(file);
+      const [hash, preview] = await Promise.all([
+        computeSha256FromFile(file),
+        readArtworkDataUrl(file),
+      ]);
       setVersionFileHash(hash);
-
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = () => setVersionFilePreview(reader.result as string);
-        reader.readAsDataURL(file);
-      } else {
-        setVersionFilePreview("");
-      }
+      setVersionFilePreview(preview);
     } catch (err) {
       setVersionError(`Failed to compute hash: ${String(err)}`);
     } finally {
@@ -359,6 +357,7 @@ export default function ArtworkDetailPage() {
 
     try {
       const existingVersions = project.versions || [];
+      const resolvedVersionMime = resolveArtworkMimeType(versionFile) || versionFile.type || "application/octet-stream";
       const newVersion: ArtworkVersion = {
         id: `ver_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
         projectId: project.id,
@@ -369,7 +368,7 @@ export default function ArtworkDetailPage() {
         hasFile: true,
         file: {
           name: versionFile.name,
-          mimeType: versionFile.type || "application/octet-stream",
+          mimeType: resolvedVersionMime,
           sizeBytes: versionFile.size,
           sha256Hash: versionFileHash,
           algorithm: "SHA-256",
@@ -378,7 +377,7 @@ export default function ArtworkDetailPage() {
         sha256Hash: versionFileHash,
         fileName: versionFile.name,
         fileSizeBytes: versionFile.size,
-        mimeType: versionFile.type || "application/octet-stream",
+        mimeType: resolvedVersionMime,
         notes: versionNotes.trim() || undefined,
         isArchivalFinal,
         dataUrl: versionFilePreview || undefined,
@@ -414,7 +413,7 @@ export default function ArtworkDetailPage() {
         primaryArtwork: isArchivalFinal
           ? {
               name: versionFile.name,
-              mimeType: versionFile.type || "application/octet-stream",
+              mimeType: resolvedVersionMime,
               sizeBytes: versionFile.size,
               sha256Hash: versionFileHash,
               dataUrl: versionFilePreview || project.primaryArtwork.dataUrl,
@@ -1055,7 +1054,7 @@ export default function ArtworkDetailPage() {
                 <input
                   type="file"
                   id="evidenceInput"
-                  accept={APP_CONFIG.limits.allowedExtensions.join(",")}
+                  accept={[...APP_CONFIG.limits.allowedMimeTypes, ...APP_CONFIG.limits.allowedExtensions].join(",")}
                   onChange={handleEvidenceFileChange}
                   className="text-xs text-[#57534E]"
                 />
@@ -1118,7 +1117,7 @@ export default function ArtworkDetailPage() {
                       </label>
                       <input
                         type="file"
-                        accept={APP_CONFIG.limits.allowedExtensions.join(",")}
+                        accept={[...APP_CONFIG.limits.allowedMimeTypes, ...APP_CONFIG.limits.allowedExtensions].join(",")}
                         onChange={handleRevisedArtworkFileChange}
                         className="text-xs text-[#57534E]"
                         required={isRevision}
@@ -1237,7 +1236,7 @@ export default function ArtworkDetailPage() {
 
                 <input
                   type="file"
-                  accept={APP_CONFIG.limits.allowedExtensions.join(",")}
+                  accept={[...APP_CONFIG.limits.allowedMimeTypes, ...APP_CONFIG.limits.allowedExtensions].join(",")}
                   onChange={handleVersionFileChange}
                   className="text-xs text-[#57534E]"
                   required

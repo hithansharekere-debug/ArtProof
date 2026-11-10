@@ -30,14 +30,17 @@ export default function ActivityPage() {
 
   useEffect(() => {
     let active = true;
-    storage.getProjects().then((all) => {
-      if (active) {
-        setProjects(all);
-        setLoading(false);
-      }
-    }).catch(() => {
-      if (active) setLoading(false);
-    });
+    storage
+      .getProjects()
+      .then((all) => {
+        if (active) {
+          setProjects(all);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };

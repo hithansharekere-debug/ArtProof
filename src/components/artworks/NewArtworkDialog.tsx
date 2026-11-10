@@ -10,7 +10,14 @@ import { Button } from "@/components/ui/Button";
 import { createGenesisVersion, storage } from "@/lib/storage/storage-provider";
 import { createTimelineEvent } from "@/lib/crypto/manifest";
 import { computeSha256FromFile } from "@/lib/crypto/sha256";
-import { projectInputSchema, validateArtworkFile, sanitizeFilename } from "@/lib/validation/schemas";
+import { APP_CONFIG } from "@/config/app-config";
+import {
+  projectInputSchema,
+  validateArtworkFile,
+  sanitizeFilename,
+  resolveArtworkMimeType,
+  readArtworkDataUrl,
+} from "@/lib/validation/schemas";
 import { ArtworkProject } from "@/types/provenance";
 
 interface NewArtworkDialogProps {
@@ -57,12 +64,14 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
     onClose();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const validation = validateArtworkFile(file);
     if (!validation.valid) {
+      setSelectedFile(null);
+      setFilePreview("");
       setErrors((prev) => ({ ...prev, file: validation.error || "Invalid file" }));
       return;
     }
@@ -74,20 +83,18 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
     });
 
     setSelectedFile(file);
-
-    if (file.type.startsWith("image/")) {
-      const reader = new FileReader();
-      reader.onload = () => setFilePreview(reader.result as string);
-      reader.readAsDataURL(file);
-    } else {
-      setFilePreview("");
-    }
+    const preview = await readArtworkDataUrl(file);
+    setFilePreview(preview);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (isSubmitting || isSuccess) return;
+
+    if (errors.file) {
+      return;
+    }
 
     // Validate using Zod schema
     const inputData = {
@@ -126,13 +133,19 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
       let masterFileName = `${sanitizeFilename(parseResult.data.title, "artwork")}-master.png`;
       let masterMimeType = "image/png";
       let masterSizeBytes = 1024;
-      const masterDataUrl = filePreview || undefined;
+      let masterDataUrl = filePreview || undefined;
 
       if (selectedFile) {
         masterFileName = sanitizeFilename(selectedFile.name, "master.png");
-        masterMimeType = selectedFile.type || "application/octet-stream";
+        masterMimeType =
+          resolveArtworkMimeType(selectedFile) || selectedFile.type || "application/octet-stream";
         masterSizeBytes = selectedFile.size;
-        masterFileHash = await computeSha256FromFile(selectedFile);
+        const [computedHash, resolvedPreview] = await Promise.all([
+          computeSha256FromFile(selectedFile),
+          masterDataUrl ? Promise.resolve(masterDataUrl) : readArtworkDataUrl(selectedFile),
+        ]);
+        masterFileHash = computedHash;
+        masterDataUrl = resolvedPreview || undefined;
       }
 
       // Genesis event (Sequence #0)
@@ -320,7 +333,10 @@ export function NewArtworkDialog({ isOpen, onClose, onCreated }: NewArtworkDialo
                 <input
                   id="dialogArtworkFile"
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/svg+xml,image/avif,application/pdf"
+                  accept={[
+                    ...APP_CONFIG.limits.allowedMimeTypes,
+                    ...APP_CONFIG.limits.allowedExtensions,
+                  ].join(",")}
                   onChange={handleFileChange}
                   disabled={isSubmitting}
                   className="text-xs text-[#57534E] file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#EFE9DF] file:text-[#1C1917] hover:file:bg-[#E5DDCF] cursor-pointer"

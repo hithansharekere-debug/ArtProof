@@ -40,24 +40,26 @@ export default function ProvenancePassportPage() {
 
   useEffect(() => {
     let active = true;
-    storage.getProject(projectId).then(async (p) => {
-      if (!active) return;
-      if (!p) {
-        setProject(null);
-        setLoading(false);
-        return;
-      }
-      setProject(p);
-      const m = buildProvenanceManifest(p);
-      setManifest(m);
-      const rep = await verifyProvenanceManifest(m);
-      if (active) {
-        setReport(rep);
-        setLoading(false);
-      }
-    }).catch(() => {
-      if (active) setLoading(false);
-    });
+    storage
+      .getProject(projectId)
+      .then(async (p) => {
+        if (!active) return;
+        if (!p) {
+          setProject(null);
+          return;
+        }
+        setProject(p);
+        const m = buildProvenanceManifest(p);
+        setManifest(m);
+        const rep = await verifyProvenanceManifest(m);
+        if (active) {
+          setReport(rep);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
     };

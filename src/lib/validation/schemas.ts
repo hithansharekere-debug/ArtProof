@@ -83,8 +83,152 @@ export const versionInputSchema = z.object({
     .optional(),
 });
 
+const MIME_ALIASES: Record<string, string> = {
+  "image/png": "image/png",
+  "image/x-png": "image/png",
+  "image/x-citrix-png": "image/png",
+  "image/apng": "image/png",
+  "application/png": "image/png",
+  "application/x-png": "image/png",
+  "image/jpeg": "image/jpeg",
+  "image/jpg": "image/jpeg",
+  "image/pjpeg": "image/jpeg",
+  "image/x-citrix-jpeg": "image/jpeg",
+  "image/jfif": "image/jpeg",
+  "application/jpg": "image/jpeg",
+  "application/x-jpg": "image/jpeg",
+  "image/webp": "image/webp",
+  "image/svg+xml": "image/svg+xml",
+  "image/svg": "image/svg+xml",
+  "image/avif": "image/avif",
+  "application/pdf": "application/pdf",
+};
+
+const EXTENSION_MIME_MAP: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".jpe": "image/jpeg",
+  ".jfif": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".avif": "image/avif",
+  ".pdf": "application/pdf",
+};
+
+const BLOCKED_EXTENSIONS = new Set([
+  ".exe",
+  ".dll",
+  ".bat",
+  ".cmd",
+  ".sh",
+  ".ps1",
+  ".vbs",
+  ".msi",
+  ".com",
+  ".scr",
+  ".js",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".html",
+  ".htm",
+  ".php",
+  ".py",
+  ".rb",
+  ".jar",
+]);
+
+/**
+ * Resolves the canonical artwork MIME type from a File's reported MIME type and filename extension.
+ * Handles common browser/OS MIME aliases (e.g. image/jpg, image/pjpeg, image/x-png) and falls back
+ * to extension inspection when the browser reports an empty type or application/octet-stream.
+ */
+export function resolveArtworkMimeType(file: Pick<File, "name" | "type">): string | null {
+  const fileName = typeof file.name === "string" ? file.name.trim().toLowerCase() : "";
+  const dotIndex = fileName.lastIndexOf(".");
+  const ext = dotIndex !== -1 ? fileName.slice(dotIndex) : "";
+
+  if (ext && BLOCKED_EXTENSIONS.has(ext)) {
+    return null;
+  }
+
+  const rawMime =
+    typeof file.type === "string" ? file.type.trim().toLowerCase().split(";")[0].trim() : "";
+  const allowedMimes = new Set(APP_CONFIG.limits.allowedMimeTypes.map((m) => m.toLowerCase()));
+
+  if (rawMime && rawMime !== "application/octet-stream") {
+    const normalized = MIME_ALIASES[rawMime] || rawMime;
+    if (allowedMimes.has(normalized)) {
+      return normalized;
+    }
+    return null;
+  }
+
+  if (ext) {
+    const mappedMime = EXTENSION_MIME_MAP[ext];
+    if (mappedMime && allowedMimes.has(mappedMime)) {
+      return mappedMime;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Reads an image artwork File into a canonical base64 data URL for local preview and storage.
+ * Ensures the resulting data URL uses a normalized image MIME prefix even if the browser omitted file.type.
+ */
+export async function readArtworkDataUrl(file: File): Promise<string> {
+  const resolvedMime = resolveArtworkMimeType(file) || file.type || "";
+  if (!resolvedMime.startsWith("image/")) {
+    return "";
+  }
+
+  if (typeof FileReader !== "undefined") {
+    return new Promise((resolve) => {
+      try {
+        const reader = new FileReader();
+        reader.onload = () => {
+          resolve(typeof reader.result === "string" ? reader.result : "");
+        };
+        reader.onerror = () => resolve("");
+        const targetBlob =
+          file.type === resolvedMime ? file : new Blob([file], { type: resolvedMime });
+        reader.readAsDataURL(targetBlob);
+      } catch {
+        resolve("");
+      }
+    });
+  }
+
+  if (typeof file.arrayBuffer === "function") {
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 =
+        typeof btoa === "function"
+          ? btoa(binary)
+          : Buffer.from(buffer).toString("base64");
+      return `data:${resolvedMime};base64,${base64}`;
+    } catch {
+      return "";
+    }
+  }
+
+  return "";
+}
+
 // File validation helper
-export function validateArtworkFile(file: File): { valid: boolean; error?: string } {
+export function validateArtworkFile(file: File): {
+  valid: boolean;
+  error?: string;
+  mimeType?: string;
+} {
   if (file.size > APP_CONFIG.limits.maxFileSizeBytes) {
     return {
       valid: false,
@@ -92,17 +236,15 @@ export function validateArtworkFile(file: File): { valid: boolean; error?: strin
     };
   }
 
-  // Type check
-  const mime = file.type.toLowerCase();
-  const allowed = APP_CONFIG.limits.allowedMimeTypes.map((m) => m.toLowerCase());
-  if (!allowed.includes(mime)) {
+  const resolvedMime = resolveArtworkMimeType(file);
+  if (!resolvedMime) {
     return {
       valid: false,
-      error: `Unsupported file type "${file.type || 'unknown'}". Supported types: PNG, JPEG, WebP, SVG, AVIF, PDF.`,
+      error: `Unsupported file type "${file.type || file.name || "unknown"}". Supported types: PNG, JPEG, WebP, SVG, AVIF, PDF.`,
     };
   }
 
-  return { valid: true };
+  return { valid: true, mimeType: resolvedMime };
 }
 
 // Provenance Manifest Schema for untrusted JSON imports
@@ -221,7 +363,8 @@ export function isSafeDataUrl(url: unknown): url is string {
   }
 
   // Strictly allow only verified image types and pdf
-  const safePrefixRegex = /^data:(image\/(png|jpeg|jpg|webp|svg\+xml|avif)|application\/pdf);base64,[A-Za-z0-9+/=]+$/;
+  const safePrefixRegex =
+    /^data:(image\/(png|x-png|apng|jpeg|jpg|pjpeg|jfif|webp|svg\+xml|avif)|application\/pdf)(;[a-zA-Z0-9\-_=.]+)*;base64,[A-Za-z0-9+/=\s]+$/;
   return safePrefixRegex.test(url);
 }
 
